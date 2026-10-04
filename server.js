@@ -5,7 +5,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
-const startupLogPath = path.join(__dirname, 'android-startup.log');
+const startupLogPath = process.env.QINGSI_GAMES_STARTUP_LOG || path.join(__dirname, 'android-startup.log');
 
 // Language packs
 const SERVER_LANGS = {
@@ -28,6 +28,14 @@ logStep('[android-node] server.js require: ws');
 logStep('[android-node] server.js require: os/path/fs/crypto');
 logStep('[android-node] server.js require: startup-port');
 const { getNextPort, isRecoverablePortError } = require('./startup-port');
+const { getPublicBaseUrl, buildRoomShareUrl } = require('./public-origin');
+const {
+  getSecurityConfig, isAllowedWebSocketOrigin, createTokenBucket,
+  validateClientMessage, ROOM_ID,
+} = require('./internet-security');
+const publicBaseUrl = getPublicBaseUrl(process.env.PUBLIC_BASE_URL);
+const security = getSecurityConfig();
+const { version } = require('./package.json');
 
 const PORT = parseInt(process.env.PORT) || 3000;
 const MAX_PORT_RETRIES = 5;
@@ -84,6 +92,13 @@ if (!process.env.ANDROID_SKIP_REGISTRY_LOAD) {
 
 logStep('[android-node] server.js init express app');
 const app = express();
+app.disable('x-powered-by');
+app.use((req, res, next) => {
+  res.set('X-Content-Type-Options', 'nosniff');
+  res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+  next();
+});
 // gzip text-based assets (HTML/CSS/JSON/JS). PNG/JPG/WebP are already compressed
 // so the filter skips them to save CPU on every request.
 const compression = require('compression');
@@ -104,23 +119,19 @@ app.use(express.static(path.join(__dirname, 'public'), {
   },
 }));
 
-// QR code endpoint — generates QR with the host from the request
-// Works on LAN (192.168.x.x:3000) and cloud (project.up.railway.app)
+// QR code endpoint: the invite URL is canonical in public mode and retains
+// GameNest's host/LAN selection when PUBLIC_BASE_URL is unset.
 app.get('/qr', async (req, res) => {
   try {
     const room = req.query.room;
-    if (!room) { res.status(400).send('missing room'); return; }
-    // Prefer a real LAN IP so the QR is scannable from a phone on the same WiFi.
-    // When the requester came via localhost/127.0.0.1, using that Host makes the
-    // QR point at the phone's own loopback — useless. Fall back to the first
-    // shareable 192.168.x.x / 10.x.x.x address.
-    let host = req.get('Host') || 'localhost:3000';
-    if (/^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(host)) {
-      const lan = getShareableLanIPs()[0];
-      if (lan) host = `${lan.ip}:${activePort}`;
-    }
-    const proto = req.headers['x-forwarded-proto'] === 'https' ? 'https' : 'http';
-    const url = `${proto}://${host}/?room=${room}`;
+    if (typeof room !== 'string' || !ROOM_ID.test(room)) { res.status(400).send('invalid room'); return; }
+    const url = buildRoomShareUrl(room, {
+      publicBaseUrl,
+      requestHost: req.get('Host'),
+      forwardedProto: req.headers['x-forwarded-proto'],
+      getShareableLanIP: () => getShareableLanIPs()[0]?.ip,
+      port: activePort,
+    });
     const png = await QRCode.toBuffer(url, { width: 256, margin: 2, color: { dark: '#1a1a1a', light: '#ffffff' } });
     res.set('Content-Type', 'image/png');
     res.send(png);
@@ -129,13 +140,25 @@ app.get('/qr', async (req, res) => {
   }
 });
 
+app.get('/api/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ ok: true, service: 'qingsi-games', version });
+});
+
 // Lightweight room existence check (used by lobby to verify resume banner)
 app.get('/api/room-exists/:roomId', (req, res) => {
   const room = rooms.get(req.params.roomId);
-  res.json({ exists: !!room });
+  const token = req.get('X-Resume-Token');
+  res.set('Cache-Control', 'no-store');
+  res.json({ exists: !!room && typeof token === 'string' && token.length <= 128 &&
+    Array.from(room.players.values()).some(info => info.resumeToken === token) });
 });
 
 app.get('/network-info', (req, res) => {
+  // Android/LAN discovery is available when running in LAN mode only.
+  if (publicBaseUrl) {
+    return res.status(404).json({ error: 'not found' });
+  }
   const lanURLs = getShareableLanIPs().map(({ name, ip }) => ({
     name,
     ip,
@@ -150,7 +173,7 @@ app.get('/network-info', (req, res) => {
 
 // 调试接口默认关闭：/api/debug/room/:id 会 dump 原始 state（绕过 playerView，
 // 暴露所有玩家手牌），forceWin 还能直接改判胜负。本地排查用 GAMENEST_DEBUG=1 node server.js 开启。
-const DEBUG_API = process.env.GAMENEST_DEBUG === '1';
+const DEBUG_API = process.env.GAMENEST_DEBUG === '1' && !publicBaseUrl && process.env.NODE_ENV !== 'production';
 app.use('/api/debug', (req, res, next) => {
   if (!DEBUG_API) return res.status(404).json({ error: 'not found' });
   next();
@@ -217,7 +240,7 @@ app.get('/api/debug/room/:roomId', (req, res) => {
 });
 
 // Debug: force win for player 0 (摆必赢，验积分板加分)
-app.post('/api/debug/room/:roomId/forceWin', express.json(), (req, res) => {
+app.post('/api/debug/room/:roomId/forceWin', express.json({ limit: '32kb' }), (req, res) => {
   const room = rooms.get(req.params.roomId);
   if (!room) return res.json({ error: 'room not found' });
   const state = room.state;
@@ -266,12 +289,31 @@ app.post('/api/debug/room/:roomId/forceWin', express.json(), (req, res) => {
     } else {
       return res.json({ error: 'not mahjong' });
     }
-  } catch(e){ return res.json({ error: e.message, stack: e.stack }); }
+  } catch(e){ return res.status(400).json({ error: 'debug request failed' }); }
+});
+
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  res.status(err.status === 413 ? 413 : 400).json({ error: 'invalid request' });
 });
 
 logStep('[android-node] server.js init http/ws server');
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server });
+const wss = new WebSocketServer({ noServer: true, maxPayload: security.wsMaxPayload });
+function rejectUpgrade(socket, status, message) {
+  socket.end(`HTTP/1.1 ${status} ${message}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`);
+}
+server.on('upgrade', (request, socket, head) => {
+  if (!isAllowedWebSocketOrigin(request, publicBaseUrl)) {
+    rejectUpgrade(socket, 403, 'Forbidden');
+    return;
+  }
+  if (wss.clients.size >= security.maxConnections) {
+    rejectUpgrade(socket, 503, 'Service Unavailable');
+    return;
+  }
+  wss.handleUpgrade(request, socket, head, ws => wss.emit('connection', ws, request));
+});
 wss.on('error', (err) => {
   if (isRecoverablePortError(err)) return;
   console.error('WebSocket server error:', err.message);
@@ -296,8 +338,8 @@ const rooms = new Map();
 function generateRoomId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let id = '';
-  const len = Math.random() < 0.5 ? 3 : 4;
-  for (let i = 0; i < len; i++) id += chars[Math.floor(Math.random() * chars.length)];
+  const len = crypto.randomInt(2) === 0 ? 3 : 4;
+  for (let i = 0; i < len; i++) id += chars[crypto.randomInt(chars.length)];
   return id;
 }
 
@@ -312,7 +354,12 @@ function createRoom(ws, gameType, lang) {
     console.error('createState failed for game "' + gameType + '":', e && e.message);
     return null;
   }
-  const roomId = generateRoomId();
+  let roomId;
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const candidate = generateRoomId();
+    if (!rooms.has(candidate)) { roomId = candidate; break; }
+  }
+  if (!roomId) return null;
   const room = {
     game: gameType,
     maxPlayers: gameMod.maxPlayers,
@@ -325,10 +372,12 @@ function createRoom(ws, gameType, lang) {
     _cleanupTimer: null,
     _botTimer: null,
     _realtimeTimer: null,
+    _tfBotTimers: new Set(),
+    _unoLastChallenge: null,
     // Lobby phase system
     phase: 'lobby',            // 'lobby' | 'ready' | 'playing'
     readyPlayers: new Set(),   // Set of player indices that are ready
-    options: {},               // Game-specific options (e.g. requireBreak)
+    options: Object.create(null), // Game-specific options (e.g. requireBreak)
   };
   room.players.set(ws, { name: 'Player 1', index: 0, avatar: '😊', resumeToken: crypto.randomUUID(), disconnectedAt: null });
   rooms.set(roomId, room);
@@ -411,17 +460,28 @@ function skipDisconnectedTurn(room) {
       } else {
         state.currentPlayer = candidate;
       }
+      if (room.game === 'rummikub' && gameMod.recordTurn) gameMod.recordTurn(state, candidate);
       return true;
     }
   }
   return false;
 }
 
+const SERVER_FILTERED_GAMES = new Set([
+  'uno', 'doudizhu', 'bigtwo', 'oldmaid', 'exploding-kittens', 'rummikub', 'liarsbar',
+]);
+
 function broadcastGameView(room, msgType) {
   const t = msgType || 'game_state';
   const gameMod = gameRegistry[room.game];
   const players = roomPlayersList(room);
-  if (room.game === 'minesweeper' && gameMod.playerBoardView) {
+  if (SERVER_FILTERED_GAMES.has(room.game)) {
+    for (const [client, info] of room.players) {
+      if (client.readyState === 1) {
+        client.send(JSON.stringify({ type: t, state: gameViewForPlayer(room, info.index), players }));
+      }
+    }
+  } else if (room.game === 'minesweeper' && gameMod.playerBoardView) {
     for (const [client, info] of room.players) {
       if (client.readyState === 1) {
         const viewState = Object.assign({}, room.state, { board: gameMod.playerBoardView(room.state, info.index) });
@@ -437,6 +497,75 @@ function broadcastGameView(room, msgType) {
   } else {
     broadcastRoom(room, { type: t, state: room.state, players });
   }
+}
+
+function gameViewForPlayer(room, playerIndex) {
+  if (!room.state) return null;
+  const gameMod = gameRegistry[room.game];
+  if (room.game === 'uno') {
+    const state = room.state;
+    return {
+      ...state,
+      deck: Array(state.deck.length).fill(null),
+      hands: state.hands.map((hand, index) => index === playerIndex ? hand : Array(hand.length).fill(null)),
+      pendingChallenge: state.pendingChallenge ? {
+        by: state.pendingChallenge.by,
+        target: state.pendingChallenge.target,
+        priorColor: state.pendingChallenge.priorColor,
+        chosenColor: state.pendingChallenge.chosenColor,
+      } : null,
+      lastChallengeResult: room._unoLastChallenge,
+    };
+  }
+  if (SERVER_FILTERED_GAMES.has(room.game)) {
+    const state = room.state;
+    const hidden = cards => Array.isArray(cards) ? Array(cards.length).fill(null) : cards;
+    const hands = state.hands.map((hand, index) => index === playerIndex ? hand : hidden(hand));
+    const view = { ...state, hands };
+    if (room.game === 'doudizhu') {
+      const bottomCards = state.phase === 'bidding' ? hidden(state.bottomCards) : state.bottomCards;
+      view.bottomCards = bottomCards;
+      if (state.board) view.board = { ...state.board, hands, bottomCards };
+    } else if (room.game === 'oldmaid') {
+      if (state.lastDraw && state.lastDraw.to !== playerIndex) {
+        view.lastDraw = { ...state.lastDraw, card: null };
+      }
+      view.messages = state.messages.map(message => {
+        if (message.to === playerIndex || !Object.hasOwn(message, 'cardDrawn')) return message;
+        const { cardDrawn, ...publicMessage } = message;
+        return publicMessage;
+      });
+    } else if (room.game === 'exploding-kittens') {
+      view.deck = hidden(state.deck);
+      if (state.currentPlayer !== playerIndex) {
+        view.futureCards = null;
+        view.peekedCards = null;
+      }
+    } else if (room.game === 'rummikub') {
+      view.pool = hidden(state.pool);
+      view.timeline = require('./public/js/rummikub-activity').publicTimeline(state.timeline);
+      delete view.chatAt;
+      if (state.currentPlayer !== playerIndex) {
+        view.workspace = [];
+        view.savedHand = null;
+        view.savedHandIds = null;
+      }
+    } else if (room.game === 'liarsbar') {
+      delete view._bulletChamber;
+      view.pileCards = hidden(state.pileCards);
+      view.lastPlayedCards = hidden(state.lastPlayedCards);
+      view.pileClaims = state.pileClaims.map(claim => ({
+        playerIndex: claim.playerIndex,
+        claimedRank: claim.claimedRank,
+        cardCount: claim.cardIds.length,
+      }));
+    }
+    return view;
+  }
+  if (room.game === 'minesweeper' && gameMod.playerBoardView) {
+    return Object.assign({}, room.state, { board: gameMod.playerBoardView(room.state, playerIndex) });
+  }
+  return gameMod.playerView ? gameMod.playerView(room.state, playerIndex) : room.state;
 }
 
 function applyRuntimeState(room, totalPlayers) {
@@ -455,15 +584,42 @@ function applyRuntimeState(room, totalPlayers) {
 }
 
 function clearAllRoomTimers(room) {
+  clearTimeout(room._cleanupTimer);
   clearTimeout(room._botTimer);
   clearTimeout(room._tfTimer);
   clearTimeout(room._dgTimer);
+  clearTimeout(room._ddzTurnTimer);
   stopRealtimeGame(room);
-  if (room._tfBotTimers) {
-    for (const h of room._tfBotTimers) clearTimeout(h);
-    room._tfBotTimers = [];
-  }
+  for (const h of room._tfBotTimers || []) clearTimeout(h);
+  room._tfBotTimers = new Set();
+  room._tfBotState = null;
+  room._tfBotRound = null;
 }
+
+function destroyRoom(room) {
+  if (!room || rooms.get(room._roomId) !== room) return;
+  clearAllRoomTimers(room);
+  for (const info of room.players.values()) clearTimeout(info._disconnectTimer);
+  rooms.delete(room._roomId);
+}
+
+server.on('close', () => {
+  for (const room of rooms.values()) destroyRoom(room);
+  wss.close();
+});
+
+let shuttingDown = false;
+function shutdownServer() {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  clearInterval(wssHeartbeat);
+  for (const room of rooms.values()) destroyRoom(room);
+  for (const ws of wss.clients) ws.terminate();
+  server.close();
+  server.closeIdleConnections?.();
+}
+process.once('SIGTERM', shutdownServer);
+process.once('SIGINT', shutdownServer);
 
 // Mahjong: resolve a winner index to a fan total. Cantonese stores the resolved fan
 // (incl. buy-tile bonus) on state.winInfo; Sichuan computes it via calculateScore.
@@ -591,15 +747,22 @@ function checkMahjongRoundEnd(room) {
 
 function scheduleTwentyFourBots(room) {
   if (!room.bots || room.bots.size === 0) return;
+  const state = room.state;
+  if (room._tfBotState === state && room._tfBotRound === state.currentRound) return;
+  for (const handle of room._tfBotTimers) clearTimeout(handle);
+  room._tfBotTimers.clear();
+  room._tfBotState = state;
+  room._tfBotRound = state.currentRound;
   for (const [idx, bot] of room.bots) {
     const realCount = room.state._realPlayerCount || room.players.size;
     const delay = realCount < 3
       ? 20000 + Math.random() * 10000   // 1-2 real players: 20~30s
       : 30000 + Math.random() * 10000;  // 3+ real players: 30~40s
     const attempt = (retries) => {
-      setTimeout(() => {
-        if (!rooms.has(room._roomId)) return;
-        if (room.state.phase !== 'playing') {
+      const handle = setTimeout(() => {
+        room._tfBotTimers.delete(handle);
+        if (rooms.get(room._roomId) !== room || room.state !== state) return;
+        if (state.phase !== 'playing') {
           // round hasn't started yet — retry once after a short wait
           if (retries > 0) attempt(retries - 1);
           return;
@@ -613,6 +776,7 @@ function scheduleTwentyFourBots(room) {
           broadcastRoom(room, { type: 'game_state', state: room.state, players: roomPlayersList(room) });
         } catch(e) { console.error('24 Bot exception:', e.message); }
       }, retries === 3 ? delay : 300);
+      room._tfBotTimers.add(handle);
     };
     attempt(3);
   }
@@ -854,11 +1018,21 @@ wss.on('connection', (ws) => {
   ws.on('error', () => {});
   let currentRoomId = null;
   let currentRoom = null;
+  const takeInbound = createTokenBucket(120, 40);
+  const takeJoin = createTokenBucket(6, 0.5);
+  let lastCreateAt = 0;
 
-  ws.on('message', (raw) => {
+  ws.on('message', (raw, isBinary) => {
+    if (!takeInbound()) { ws.close(1008, 'Message rate exceeded'); return; }
+    if (isBinary) { ws.close(1003, 'Text messages only'); return; }
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
+    if (!validateClientMessage(msg)) {
+      ws.send(JSON.stringify({ type: 'error', code: 'INVALID_MESSAGE', message: 'Invalid message' }));
+      return;
+    }
     const { type, data } = msg;
+    try {
 
     // --- create_room ---
     if (type === 'create_room') {
@@ -867,6 +1041,19 @@ wss.on('connection', (ws) => {
         ws.send(JSON.stringify({ type: 'error', message: serverT(currentRoom, 'invalid_game_type') }));
         return;
       }
+      if (Date.now() - lastCreateAt < 3000) {
+        ws.send(JSON.stringify({ type: 'error', code: 'CREATE_COOLDOWN', message: 'Please wait before creating another room' }));
+        return;
+      }
+      if (currentRoom && rooms.get(currentRoomId) === currentRoom && currentRoom.players.has(ws)) {
+        ws.send(JSON.stringify({ type: 'error', code: 'ALREADY_IN_ROOM', message: 'Already in a room' }));
+        return;
+      }
+      if (rooms.size >= security.maxRooms) {
+        ws.send(JSON.stringify({ type: 'error', code: 'ROOM_LIMIT', message: 'Room limit reached' }));
+        return;
+      }
+      lastCreateAt = Date.now();
       const result = createRoom(ws, game, lang || 'zh');
       if (!result) {
         ws.send(JSON.stringify({ type: 'error', message: serverT(currentRoom, 'create_room_failed') }));
@@ -978,6 +1165,7 @@ wss.on('connection', (ws) => {
       }
       if (targetInfo.index === hostIndex) return;
       currentRoom.players.delete(targetWS);
+      clearTimeout(targetInfo._disconnectTimer);
       currentRoom.readyPlayers.delete(playerIndex);
       if (targetWS.readyState === 1) {
         targetWS.send(JSON.stringify({ type: 'kicked', reason: serverT(currentRoom, 'kicked_by_host') }));
@@ -993,7 +1181,16 @@ wss.on('connection', (ws) => {
 
     // --- join_room ---
     if (type === 'join_room') {
+      if (!takeJoin()) {
+        ws.send(JSON.stringify({ type: 'error', code: 'JOIN_RATE_LIMIT', message: 'Too many join attempts' }));
+        return;
+      }
       const { roomId, resumeToken, lang } = data || {};
+      if (currentRoom && currentRoomId !== roomId &&
+          rooms.get(currentRoomId) === currentRoom && currentRoom.players.has(ws)) {
+        ws.send(JSON.stringify({ type: 'error', code: 'ALREADY_IN_ROOM', message: 'Already in a room' }));
+        return;
+      }
       const room = rooms.get(roomId);
       if (!room) {
         ws.send(JSON.stringify({ type: 'error', code: 'ROOM_NOT_FOUND', message: serverT(currentRoom, 'room_not_found') }));
@@ -1015,7 +1212,7 @@ wss.on('connection', (ws) => {
         currentRoomId = roomId;
         currentRoom = room;
         ws.send(JSON.stringify({ type: 'room_joined', roomId, game: room.game, maxPlayers: room.maxPlayers,
-          playerIndex: info.index, players: roomPlayersList(room), state: room.state, phase: room.phase,
+          playerIndex: info.index, players: roomPlayersList(room), state: gameViewForPlayer(room, info.index), phase: room.phase,
           options: room.options, resumeToken: info.resumeToken }));
         sendToRoom(room, {
           type: 'room_update',
@@ -1037,7 +1234,7 @@ wss.on('connection', (ws) => {
           maxPlayers: room.maxPlayers,
           playerIndex: existing[1].index,
           players: roomPlayersList(room),
-          state: room.state,
+          state: gameViewForPlayer(room, existing[1].index),
           phase: room.phase,
           options: room.options,
         }));
@@ -1046,6 +1243,7 @@ wss.on('connection', (ws) => {
       // Clean up stale connections (WS closed but close event hasn't fired yet)
       for (const [w, info] of room.players) {
         if (w.readyState !== 1 && (!info.disconnectedAt || Date.now() - info.disconnectedAt > 300000)) {
+          clearTimeout(info._disconnectTimer);
           room.players.delete(w);
           room.readyPlayers.delete(info.index);
         }
@@ -1089,7 +1287,7 @@ wss.on('connection', (ws) => {
         maxPlayers: room.maxPlayers,
         playerIndex: idx,
         players: roomPlayersList(room),
-        state: room.state,
+        state: gameViewForPlayer(room, idx),
         phase: room.phase,
         options: room.options,
         resumeToken: room.players.get(ws).resumeToken,
@@ -1158,6 +1356,7 @@ wss.on('connection', (ws) => {
 
       currentRoom.phase = 'playing';
       applyRuntimeState(currentRoom, totalPlayers);
+      currentRoom._unoLastChallenge = null;
       // 麻将首局随机坐庄：不让房主默认当庄先摸牌先出牌
       if (currentRoom.game === 'mahjong-sichuan' || currentRoom.game === 'mahjong-cantonese') {
         currentRoom.state.dealerIndex = Math.floor(Math.random() * totalPlayers);
@@ -1304,9 +1503,26 @@ wss.on('connection', (ws) => {
       const playerInfo = currentRoom.players.get(ws);
       if (!playerInfo) return;
 
-      const err = gameMod.handleMove(data, currentRoom.state, playerInfo.index);
+      let unoChallengeResult = null;
+      if (currentRoom.game === 'uno' && data.challengeResponse === 'challenge' && currentRoom.state.pendingChallenge) {
+        const challenge = currentRoom.state.pendingChallenge;
+        unoChallengeResult = {
+          by: challenge.by,
+          hadMatch: challenge.handSnapshot.some(card => card.color === challenge.priorColor),
+        };
+      }
+      const rummikubSocial = currentRoom.game === 'rummikub' && (data.action === 'chat' || data.action === 'reaction');
+      const err = rummikubSocial && currentRoom.phase !== 'playing'
+        ? 'rk_chat_not_started' : gameMod.handleMove(data, currentRoom.state, playerInfo.index);
       if (err) {
         ws.send(JSON.stringify({ type: 'error', message: serverT(currentRoom, err), code: err }));
+        return;
+      }
+      if (currentRoom.game === 'uno' && data.challengeResponse) currentRoom._unoLastChallenge = unoChallengeResult;
+
+      // Rummikub chat must not advance disconnected turns or restart bot timers.
+      if (rummikubSocial) {
+        broadcastGameView(currentRoom, 'game_state');
         return;
       }
 
@@ -1371,6 +1587,7 @@ wss.on('connection', (ws) => {
       }
       currentRoom.state = gameMod.createState();
       applyRuntimeState(currentRoom, totalPlayers);
+      currentRoom._unoLastChallenge = null;
 
       // 麻将多局：庄家/累计分必须在 initGame 之前写回，
       // 因为 initGame 要按 dealerIndex 发牌决定谁先摸（写在后面就永远是 0 号先手）。
@@ -1422,8 +1639,7 @@ wss.on('connection', (ws) => {
             currentRoom.hostWS = Array.from(currentRoom.players.keys()).find(client => client.readyState === 1) || null;
           }
           if (currentRoom.players.size === 0) {
-            clearAllRoomTimers(currentRoom);
-            rooms.delete(currentRoomId);
+            destroyRoom(currentRoom);
           } else {
             broadcastRoom(currentRoom, { type: 'player_left', players: roomPlayersList(currentRoom), phase: currentRoom.phase });
             scheduleBotMove(currentRoom);
@@ -1437,6 +1653,7 @@ wss.on('connection', (ws) => {
     // --- return_to_room ---
     if (type === 'return_to_room') {
       if (!currentRoom) return;
+      if (!currentRoom.players.has(ws)) return;
       currentRoom.phase = 'lobby';
       currentRoom.readyPlayers = new Set();
       currentRoom.state = null;
@@ -1453,6 +1670,7 @@ wss.on('connection', (ws) => {
     // --- next_round (24 game multi-round) ---
     if (type === 'next_round') {
       if (!currentRoom) return;
+      if (!currentRoom.players.has(ws) || !currentRoom.state) return;
       if (currentRoom.game !== 'twentyfour') return;
       const state = currentRoom.state;
       const totalPlayers = currentRoom.players.size + (currentRoom.bots ? currentRoom.bots.size : 0);
@@ -1481,9 +1699,14 @@ wss.on('connection', (ws) => {
       scheduleBotMove(currentRoom);
       return;
     }
+    } catch (err) {
+      // Client input must never turn a game-handler exception into a process crash.
+      ws.close(1008, 'Invalid message');
+    }
   });
 
   ws.on('close', () => {
+    if (shuttingDown) return;
     if (currentRoom && currentRoomId) {
       const info = currentRoom.players.get(ws);
       if (!info) return;
@@ -1498,8 +1721,7 @@ wss.on('connection', (ws) => {
           }
           const skipped = skipDisconnectedTurn(currentRoom);
           if (currentRoom.players.size === 0) {
-            clearAllRoomTimers(currentRoom);
-            rooms.delete(currentRoomId);
+            destroyRoom(currentRoom);
             return;
           }
           broadcastRoom(currentRoom, { type: 'player_left', players: roomPlayersList(currentRoom), phase: currentRoom.phase });
@@ -1569,6 +1791,8 @@ function startServer(port, attempt = 0) {
     console.log('  ╠══════════════════════════════════════╣');
     console.log('  ║  Share the LAN address with others. ║');
     console.log('  ╚══════════════════════════════════════╝');
+    console.log(`  Local: http://localhost:${port}`);
+    if (publicBaseUrl) console.log(`  Public: ${publicBaseUrl}`);
     console.log('');
   };
 

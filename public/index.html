@@ -3,32 +3,28 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>联机桌游</title>
+<title>QingSi Games</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/qingsi-ui.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 字体已内嵌到 assets/fonts(离线可用),不再依赖 Google Fonts -->
 </head>
 <body class="lobby-page">
-  <main class="lobby-shell" style="position:relative">
-    <div class="lang-switch" onclick="var l=window.__ACTIVE_LANG==='zh'?'en':'zh';window._switchLang(l)" style="position:absolute;top:16px;right:16px;z-index:10;cursor:pointer;font-size:14px;font-weight:700;background:rgba(255,255,255,0.85);color:#1a1a1a;border:1px solid rgba(255,255,255,0.6);border-radius:999px;padding:8px 16px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 2px 8px rgba(0,0,0,0.12);">🌐 中/EN</div>
+  <main class="lobby-shell">
+    <header class="site-header">
+      <a class="site-brand" href="/" aria-label="QingSi Games 首页">QingSi Games</a>
+      <nav class="site-nav" aria-label="主导航">
+        <a href="#featured">精选</a>
+        <a href="#allGames">全部游戏</a>
+        <a class="lab-link" href="https://lab.qingsiphotograph.com/">← QingSi Lab</a>
+        <button type="button" class="lang-switch" onclick="var l=window.__ACTIVE_LANG==='zh'?'en':'zh';window._switchLang(l)" aria-label="切换语言">中 / EN</button>
+      </nav>
+    </header>
     <section class="lobby-hero">
       <div class="hero-copy">
-        <p class="eyebrow">LAN TABLETOP</p>
-        <h1 class="hero-title">联机桌游</h1>
-        <p class="hero-subtitle">同一 Wi-Fi 下，选一个游戏，几秒开房，直接开玩。</p>
-      </div>
-      <div class="hero-stats">
-        <div class="hero-stat">
-          <strong>23</strong>
-          <span>款游戏</span>
-        </div>
-        <div class="hero-stat">
-          <strong>2-10</strong>
-          <span>支持人数</span>
-        </div>
-        <div class="hero-stat">
-          <strong>本地</strong>
-          <span>局域网直连</span>
-        </div>
+        <p class="eyebrow">QINGSi LAB / GAMES</p>
+        <h1 class="hero-title">QingSi Games</h1>
+        <p class="hero-subtitle">一起玩点什么。</p>
       </div>
       <div class="hero-panels">
         <section class="hero-panel" id="resumeSection" style="display:none">
@@ -47,7 +43,9 @@
             <input class="input" id="roomCodeInput" type="text" maxlength="4" placeholder="输入房间号" autocomplete="off" autocorrect="off" autocapitalize="characters" spellcheck="false">
             <button class="btn btn-outline" id="joinBtn">加入</button>
           </div>
+          <p class="join-help">有房间号，直接加入。想开一局，先在下方选游戏。</p>
         </section>
+        <button id="quickCreate" class="quick-create-btn">创建房间</button>
       </div>
     </section>
 
@@ -56,22 +54,22 @@
       <strong id="mobileOnlyTitle">离线单机模式</strong>
       <span id="mobileOnlySub">流量下无法与他人联机，但可加 AI 玩。</span>
     </div>
-    <section class="lobby-discovery">
+    <section class="lobby-discovery" id="featured">
       <div class="discovery-header">
         <div>
-          <p class="eyebrow">精选推荐</p>
-          <h2>先从这些局开始</h2>
+          <p class="section-index">01 / FEATURED</p>
+          <h2>精选游戏</h2>
         </div>
-        <p class="discovery-hint">先选中，再点底部创建。再次点中同一张卡也会直接开房。</p>
+        <p class="discovery-hint">选一个游戏，创建房间。</p>
       </div>
       <div class="featured-strip" id="featuredStrip"></div>
     </section>
 
-    <section class="lobby-browser">
+    <section class="lobby-browser" id="allGames">
       <div class="browser-toolbar">
         <div>
-          <p class="eyebrow">浏览全部</p>
-          <h2>按风格找局</h2>
+          <p class="section-index">02 / ALL GAMES</p>
+          <h2>全部游戏</h2>
         </div>
         <div class="browser-tools">
           <input class="browser-search" id="gameSearch" type="search" placeholder="搜索游戏名、标签、类型">
@@ -82,10 +80,14 @@
       <p class="browse-empty" id="emptyState" style="display:none">没有找到匹配的游戏，换个关键词试试。</p>
     </section>
 
+    <footer class="site-footer" id="about">
+      <div><p class="section-index">03 / ABOUT</p><h2>QingSi Games</h2><p>QINGSi LAB / GAMES · 浏览器多人游戏实验。</p></div>
+      <div class="footer-links"><a href="https://lab.qingsiphotograph.com/">← QingSi Lab</a><span>Based on <a href="https://github.com/absswds/GameNest">GameNest</a> · Apache-2.0</span></div>
+    </footer>
+
   </main>
 
-  <div class="toast" id="toast"></div>
-  <button id="quickCreate" class="quick-create-btn">创建房间</button>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
 <script src="/js/lang/zh.js"></script>
 <script src="/js/lang/en.js"></script>
@@ -94,15 +96,32 @@
 <script src="/js/game-catalog.js"></script>
 <script>
 let selectedGame = 'monopoly';
-let activeCategory = (typeof _t === 'function' ? _t('all_categories') : '\u5168\u90e8');
+let activeCategory = 'ALL';
 let searchText = '';
+let lobbyBusy = false;
+
+function uiText(zh, en) { return window.__ACTIVE_LANG === 'en' ? en : zh; }
+const categoryMap = {
+  '棋盘对弈': 'BOARD', 'Board Games': 'BOARD',
+  '牌桌竞技': 'CARD', 'Cards & Tiles': 'CARD',
+  '派对同乐': 'PARTY', 'Party': 'PARTY',
+  '实时对战': 'REALTIME', 'Real-time': 'REALTIME',
+  '脑力闯关': 'PUZZLE', 'Puzzle': 'PUZZLE'
+};
+const realtimeGames = new Set(['snakebattle', 'suikabattle', '2048', 'sudoku']);
+function categoryCode(game) { return categoryMap[game.category] || 'PARTY'; }
+function gameMeta(game) {
+  return '<span>' + escapeHtml(game.players) + '</span>' +
+    (game.supportsAI ? '<span>BOT</span>' : '') +
+    (realtimeGames.has(game.id) ? '<span>REALTIME</span>' : '');
+}
 
 const __isMobileData = (new URLSearchParams(location.search).get('wifi') === '0');
 const __allGames = window.gameCatalog.list();
 const __allFeatured = window.gameCatalog.featured();
 function playable(g) { return !__isMobileData || g.supportsAI !== false; }
 const catalog = __allGames.filter(playable);
-const featuredGames = __allFeatured.filter(playable);
+const featuredGames = __allFeatured.filter(playable).slice(0, 3);
 
 function escapeHtml(text) {
   return String(text || '')
@@ -142,32 +161,30 @@ function buildCover(game, compact) {
 
 function buildFeaturedCard(game) {
   const selectedClass = game.id === selectedGame ? ' selected' : '';
-  return '<button class="featured-card' + selectedClass + '" data-game="' + game.id + '">' +
+  return '<button class="featured-card' + selectedClass + '" data-game="' + game.id + '" aria-pressed="' + (game.id === selectedGame) + '">' +
     '<div class="featured-media">' + buildCover(game, true) + '</div>' +
     '<div class="featured-content">' +
-      '<div class="featured-topline"><span>' + escapeHtml(game.category) + '</span><span>' + escapeHtml(game.players) + '</span></div>' +
+      '<div class="featured-topline"><span>' + categoryCode(game) + '</span><span>↗</span></div>' +
       '<h3>' + escapeHtml(game.name) + '</h3>' +
-      '<p>' + escapeHtml(game.subtitle) + '</p>' +
+      '<div class="game-card-details">' + gameMeta(game) + '</div>' +
     '</div>' +
   '</button>';
 }
 
 function buildBrowseCard(game) {
   const selectedClass = game.id === selectedGame ? ' selected' : '';
-  const ai = game.supportsAI ? '<span>' + _t('can_add_bot') + '</span>' : '<span>' + _t('pvp_only') + '</span>';
-  return '<button class="browse-card' + selectedClass + '" data-game="' + game.id + '">' +
+  return '<button class="browse-card' + selectedClass + '" data-game="' + game.id + '" aria-pressed="' + (game.id === selectedGame) + '">' +
     '<div class="browse-card-media">' + buildCover(game, false) + '</div>' +
     '<div class="browse-card-body">' +
-      '<div class="browse-card-meta"><span>' + escapeHtml(game.category) + '</span><span>' + escapeHtml(game.duration) + '</span></div>' +
+      '<div class="browse-card-meta"><span>' + categoryCode(game) + '</span><span>↗</span></div>' +
       '<h3>' + escapeHtml(game.name) + '</h3>' +
-      '<p>' + escapeHtml(game.description) + '</p>' +
-      '<div class="browse-card-footer"><span>' + escapeHtml(game.players) + '</span>' + ai + '</div>' +
+      '<div class="browse-card-footer">' + gameMeta(game) + '</div>' +
     '</div>' +
   '</button>';
 }
 
 function updateQuickCreate() {
-  document.getElementById('quickCreate').textContent = typeof _t === 'function' ? _t('create_room') : '\u521b\u5efa\u623f\u95f4';
+  if (!lobbyBusy) document.getElementById('quickCreate').textContent = uiText('创建房间 · ', 'Create room · ') + getGameInfo(selectedGame).name;
 }
 
 function matches(game) {
@@ -178,8 +195,7 @@ function matches(game) {
     game.category,
     (game.tags || []).join(' ')
   ].join(' ').toLowerCase();
-  const allLabel = (typeof _t === 'function' ? _t('all_categories') : '\u5168\u90e8');
-  if (activeCategory !== allLabel && game.category !== activeCategory) return false;
+  if (activeCategory !== 'ALL' && categoryCode(game) !== activeCategory) return false;
   if (!searchText) return true;
   return haystack.indexOf(searchText) >= 0;
 }
@@ -197,11 +213,13 @@ function bindSelection(containerSelector) {
 }
 
 function renderCategories() {
-  const chips = [(typeof _t === 'function' ? _t('all_categories') : '\u5168\u90e8')].concat(window.gameCatalog.categories());
+  const available = new Set(catalog.map(categoryCode));
+  const chips = ['ALL'].concat(['BOARD', 'CARD', 'PARTY', 'REALTIME', 'PUZZLE'].filter(function(code) { return available.has(code); }));
   const root = document.getElementById('categoryChips');
   root.innerHTML = chips.map(function(category) {
     const selectedClass = category === activeCategory ? ' selected' : '';
-    return '<button class="category-chip' + selectedClass + '" data-category="' + escapeHtml(category) + '">' + escapeHtml(category) + '</button>';
+    const label = category === 'ALL' ? uiText('全部', 'ALL') : category;
+    return '<button class="category-chip' + selectedClass + '" data-category="' + category + '" aria-pressed="' + (category === activeCategory) + '">' + label + '</button>';
   }).join('');
   root.querySelectorAll('.category-chip').forEach(function(chip) {
     chip.addEventListener('click', function() {
@@ -224,22 +242,38 @@ function renderCatalog() {
 function toast(msg) {
   const t = document.getElementById('toast');
   t.textContent = msg;
+  t.dataset.kind = arguments[1] || 'info';
   t.classList.add('show');
-  setTimeout(function() { t.classList.remove('show'); }, 2500);
+  clearTimeout(t._timer);
+  t._timer = setTimeout(function() { t.classList.remove('show'); }, 3500);
+}
+
+function setLobbyBusy(kind, busy) {
+  lobbyBusy = busy;
+  const create = document.getElementById('quickCreate');
+  const join = document.getElementById('joinBtn');
+  create.disabled = busy;
+  join.disabled = busy;
+  create.textContent = busy && kind === 'create' ? uiText('连接中…', 'CONNECTING…') : uiText('创建房间 · ', 'Create room · ') + getGameInfo(selectedGame).name;
+  join.textContent = busy && kind === 'join' ? uiText('加入中…', 'JOINING…') : uiText('加入', 'Join');
 }
 
 function createRoom() {
+  if (lobbyBusy) return;
   if (__isMobileData) {
-    toast(typeof _t === 'function' ? _t('mobile_data_only_msg') : '当前使用流量上网，联机功能不可用。');
+    toast(typeof _t === 'function' ? _t('mobile_data_only_msg') : '当前使用流量上网，联机功能不可用。', 'warning');
     return;
   }
+  setLobbyBusy('create', true);
   const ws = new WebSocket(getSocketURL());
+  let completed = false;
   ws.onopen = function() {
     ws.send(JSON.stringify({ type: 'create_room', data: { game: selectedGame, lang: window.__ACTIVE_LANG || 'zh' } }));
   };
   ws.onmessage = function(e) {
     const msg = JSON.parse(e.data);
     if (msg.type === 'room_created') {
+      completed = true;
       sessionStorage.setItem('roomId', msg.roomId);
       sessionStorage.setItem('playerIndex', msg.playerIndex);
       sessionStorage.setItem('game', msg.game);
@@ -247,12 +281,16 @@ function createRoom() {
       ws.close();
       location.replace('/game.html');
     } else if (msg.type === 'error') {
-      toast((typeof _t === 'function' ? _t('error_prefix') : '\u9519\u8bef\uff1a') + msg.message);
+      toast((typeof _t === 'function' ? _t('error_prefix') : '\u9519\u8bef\uff1a') + msg.message, 'error');
+      setLobbyBusy('create', false);
+      ws.close();
     }
   };
   ws.onerror = function() {
-    toast(typeof _t === 'function' ? _t('connection_failed') : '\u8fde\u63a5\u5931\u8d25\uff0c\u670d\u52a1\u5668\u662f\u5426\u5df2\u542f\u52a8\uff1f');
+    toast(uiText('连接失败，请稍后重试。', 'Connection failed. Please try again.'), 'error');
+    setLobbyBusy('create', false);
   };
+  ws.onclose = function() { if (!completed) setLobbyBusy('create', false); };
 }
 
 document.getElementById('quickCreate').addEventListener('click', function() {
@@ -260,18 +298,22 @@ document.getElementById('quickCreate').addEventListener('click', function() {
 });
 
 document.getElementById('joinBtn').addEventListener('click', function() {
+  if (lobbyBusy) return;
   const code = document.getElementById('roomCodeInput').value.trim().toUpperCase();
   if (!code) {
-    toast(typeof _t === 'function' ? _t('room_code_empty') : '\u8bf7\u8f93\u5165\u623f\u95f4\u53f7');
+    toast(typeof _t === 'function' ? _t('room_code_empty') : '\u8bf7\u8f93\u5165\u623f\u95f4\u53f7', 'warning');
     return;
   }
+  setLobbyBusy('join', true);
   const ws = new WebSocket(getSocketURL());
+  let completed = false;
   ws.onopen = function() {
     ws.send(JSON.stringify({ type: 'join_room', data: { roomId: code, lang: window.__ACTIVE_LANG || 'zh' } }));
   };
   ws.onmessage = function(e) {
     const msg = JSON.parse(e.data);
     if (msg.type === 'room_joined') {
+      completed = true;
       sessionStorage.setItem('roomId', msg.roomId);
       sessionStorage.setItem('playerIndex', msg.playerIndex);
       sessionStorage.setItem('game', msg.game);
@@ -279,7 +321,9 @@ document.getElementById('joinBtn').addEventListener('click', function() {
       ws.close();
       location.replace('/game.html');
     } else if (msg.type === 'error') {
-      toast((typeof _t === 'function' ? _t('error_prefix') : '\u9519\u8bef\uff1a') + msg.message);
+      toast((typeof _t === 'function' ? _t('error_prefix') : '\u9519\u8bef\uff1a') + msg.message, 'error');
+      setLobbyBusy('join', false);
+      ws.close();
       if (msg.code === 'ROOM_NOT_FOUND') {
         sessionStorage.removeItem('roomId');
         sessionStorage.removeItem('playerIndex');
@@ -289,8 +333,10 @@ document.getElementById('joinBtn').addEventListener('click', function() {
     }
   };
   ws.onerror = function() {
-    toast(typeof _t === 'function' ? _t('connection_failed') : '\u8fde\u63a5\u5931\u8d25\uff0c\u670d\u52a1\u5668\u662f\u5426\u5df2\u542f\u52a8\uff1f');
+    toast(uiText('连接失败，请稍后重试。', 'Connection failed. Please try again.'), 'error');
+    setLobbyBusy('join', false);
   };
+  ws.onclose = function() { if (!completed) setLobbyBusy('join', false); };
 });
 
 document.getElementById('roomCodeInput').addEventListener('keydown', function(e) {
@@ -325,7 +371,9 @@ if (sessionStorage.getItem('roomId') && sessionStorage.getItem('resumeToken')) {
   var roomId = sessionStorage.getItem('roomId');
   renderResumeBanner();
   // Verify the room still exists with the server
-  fetch('/api/room-exists/' + encodeURIComponent(roomId)).then(function(r) { return r.json(); }).then(function(data) {
+  fetch('/api/room-exists/' + encodeURIComponent(roomId), {
+    headers: { 'X-Resume-Token': sessionStorage.getItem('resumeToken') }
+  }).then(function(r) { return r.json(); }).then(function(data) {
     if (!data.exists) {
       sessionStorage.removeItem('roomId');
       sessionStorage.removeItem('playerIndex');
@@ -387,7 +435,6 @@ if (sessionStorage.getItem('roomId') && sessionStorage.getItem('resumeToken')) {
   document.getElementById('roomCodeInput').value = roomCode.trim().toUpperCase();
   // Instant feedback \u2014 pre-fill and join immediately
   var joinBtn = document.getElementById('joinBtn');
-  joinBtn.textContent = '...';
   joinBtn.click();
 })();
 
@@ -405,16 +452,8 @@ if (sessionStorage.getItem('_returnFromGame')) {
 (function() {
   if (typeof _t !== 'function') return;
   var el;
-  el = document.querySelector('.hero-title');
-  if (el) el.textContent = _t('hero_title');
   el = document.querySelector('.hero-subtitle');
-  if (el) el.textContent = _t('hero_subtitle');
-  var stats = document.querySelectorAll('.hero-stat span');
-  if (stats.length >= 3) {
-    stats[0].textContent = _t('hero_game_count');
-    stats[1].textContent = _t('hero_player_count');
-    stats[2].textContent = _t('hero_connection');
-  }
+  if (el) el.textContent = uiText('一起玩点什么。', 'Play something together.');
   el = document.getElementById('roomCodeInput');
   if (el) el.placeholder = _t('room_code_placeholder');
   el = document.getElementById('joinBtn');
@@ -423,30 +462,31 @@ if (sessionStorage.getItem('_returnFromGame')) {
   if (el) el.placeholder = _t('search_placeholder');
   el = document.getElementById('emptyState');
   if (el) el.textContent = _t('no_results');
-  el = document.getElementById('quickCreate');
-  if (el) el.textContent = _t('quick_start');
+  if (!lobbyBusy) setLobbyBusy('', false);
   renderResumeBanner();
   el = document.getElementById('resumeBtn');
   if (el) el.textContent = _t('resume_btn');
   // Title tag
-  document.title = _t('hero_title');
+  document.title = 'QingSi Games';
   // Additional i18n for section headers
   el = document.querySelector('.discovery-hint');
-  if (el) el.textContent = _t('discovery_hint');
+  if (el) el.textContent = uiText('选一个游戏，创建房间。', 'Choose a game, then create a room.');
   el = document.querySelector('.wifi-note');
   if (el) el.textContent = _t('wifi_note');
-  var sectionTitles = document.querySelectorAll('.lobby-discovery .eyebrow');
-  if (sectionTitles.length > 0) sectionTitles[0].textContent = _t('featured_label');
-  sectionTitles = document.querySelectorAll('.lobby-browser .eyebrow');
-  if (sectionTitles.length > 0) sectionTitles[0].textContent = _t('browse_label');
   var sectionHeadings = document.querySelectorAll('.discovery-header h2');
-  if (sectionHeadings.length > 0) sectionHeadings[0].textContent = _t('featured_title');
+  if (sectionHeadings.length > 0) sectionHeadings[0].textContent = uiText('精选游戏', 'Featured');
   sectionHeadings = document.querySelectorAll('.browser-toolbar h2');
-  if (sectionHeadings.length > 0) sectionHeadings[0].textContent = _t('browse_title');
-  var catChips = document.querySelectorAll('.category-chip');
-  if (catChips.length > 0) catChips[0].textContent = _t('all_categories');
+  if (sectionHeadings.length > 0) sectionHeadings[0].textContent = uiText('全部游戏', 'All Games');
   el = document.querySelector('.panel-heading');
   if (el) el.textContent = _t('join_room');
+  el = document.querySelector('.join-help');
+  if (el) el.textContent = uiText('有房间号，直接加入。想开一局，先在下方选游戏。', 'Have a code? Join directly. To host, choose a game below.');
+  el = document.querySelector('.site-nav a[href="#featured"]');
+  if (el) el.textContent = uiText('精选', 'Featured');
+  el = document.querySelector('.site-nav a[href="#allGames"]');
+  if (el) el.textContent = uiText('全部游戏', 'All Games');
+  el = document.querySelector('.site-footer > div > p:last-child');
+  if (el) el.textContent = uiText('QINGSi LAB / GAMES · 浏览器多人游戏实验。', 'QINGSi LAB / GAMES · Browser multiplayer experiments.');
 })();
 </script>
 </body>

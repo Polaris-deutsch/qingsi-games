@@ -3,8 +3,11 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-<title>GameNest — 房间</title>
+<title>QingSi Games — 房间</title>
 <link rel="stylesheet" href="/style.css">
+<link rel="stylesheet" href="/qingsi-ui.css">
+<link rel="stylesheet" href="/rummikub-activity.css">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <!-- 字体已内嵌到 assets/fonts(离线可用),不再依赖 Google Fonts -->
 <style>
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.34); display: flex; align-items: center; justify-content: center; z-index: 50; }
@@ -26,19 +29,23 @@
   .seat-swap-close { justify-self: end; }
 </style>
 </head>
-<body>
-  <div id="notifyBar" style="position:fixed;top:0;left:0;right:0;background:rgba(255,255,255,0.85);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--border);padding:14px 20px;text-align:center;font-size:15px;font-weight:600;z-index:60;transform:translateY(-100%);transition:transform .3s ease;box-shadow:0 2px 12px rgba(0,0,0,.08);"></div>
+<body class="game-page">
+  <div id="notifyBar" role="status" aria-live="polite"></div>
 
   <main class="game-page-shell">
     <header class="game-topbar">
+      <a class="site-brand" href="/" onclick="event.preventDefault();window.doLeaveRoom&&window.doLeaveRoom()">QingSi Games</a>
       <div class="game-topbar-main">
-        <button class="back-btn" onclick="window.doLeaveRoom && window.doLeaveRoom()">返回大厅</button>
         <div class="game-title-stack">
           <strong id="activeGameName">房间</strong>
           <span id="activeGameSubtitle">等待玩家加入</span>
         </div>
       </div>
-      <div class="room-id-badge" id="roomBadge">----</div>
+      <div class="game-topbar-actions">
+        <span class="connection-indicator" id="connectionIndicator" role="status" aria-live="polite"><span class="connection-dot"></span><span id="connectionText">连接中…</span></span>
+        <span class="room-id-badge" id="roomBadge">----</span>
+        <button class="back-btn" onclick="window.doLeaveRoom && window.doLeaveRoom()">返回大厅</button>
+      </div>
     </header>
 
     <section class="room-stage">
@@ -55,11 +62,11 @@
             </div>
 
             <div class="waiting-profile" id="profileEdit">
-              <span id="avatarDisplay" onclick="window.openAvatarDrawer&&window.openAvatarDrawer()" style="font-size:32px;width:54px;height:54px;display:flex;align-items:center;justify-content:center;background:var(--bg);border-radius:50%;border:2px solid var(--border);transition:border-color .2s;cursor:pointer;position:relative;">
+              <button type="button" id="avatarDisplay" aria-label="选择头像" onclick="window.openAvatarDrawer&&window.openAvatarDrawer()">
                 <span id="avatarEmoji">🙂</span>
-                <span style="position:absolute;bottom:-2px;right:-2px;font-size:11px;background:var(--accent);color:#fff;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid var(--surface);">✎</span>
-              </span>
-              <input id="nameInput" style="background:var(--bg);border:1px solid var(--border);border-radius:14px;padding:12px 14px;font-size:14px;font-weight:600;max-width:220px;transition:border-color .2s,box-shadow .2s;outline:none;" maxlength="8" placeholder="你的名字" onfocus="this.style.borderColor='var(--accent)';this.style.boxShadow='0 0 0 3px rgba(200,164,92,0.25)'" onblur="this.style.borderColor='var(--border)';this.style.boxShadow='none'">
+                <span class="avatar-edit-mark" aria-hidden="true">✎</span>
+              </button>
+              <label class="profile-name-field"><span>你的名字</span><input id="nameInput" maxlength="8" placeholder="你的名字"></label>
             </div>
 
             <div id="avatarDrawer" class="avatar-drawer-backdrop" style="display:none" onclick="if(event.target===this)window.closeAvatarDrawer()">
@@ -70,23 +77,30 @@
               </div>
             </div>
 
+            <div class="waiting-section-label">PLAYERS / SEATS</div>
             <div class="waiting-slots" id="waitingSlots"></div>
-            <div id="gameOptions" style="display:none;background:var(--bg);border-radius:14px;padding:12px;"></div>
+            <div id="gameOptions" class="game-options-shell" style="display:none"></div>
             <div class="waiting-actions">
               <button class="btn btn-outline btn-sm" id="readyBtn">准备</button>
               <button class="btn btn-outline btn-sm" id="addBotBtn" style="display:none">添加 AI</button>
               <button class="btn btn-accent btn-sm" id="startGameBtn" style="display:none">开始游戏</button>
             </div>
-            <div class="waiting-status" id="waitingStatus">等待所有玩家准备...</div>
+            <div class="waiting-status" id="waitingStatus" role="status" aria-live="polite">连接中…</div>
           </section>
 
           <aside class="surface-panel waiting-side-panel">
-            <button class="btn btn-outline btn-sm rules-btn" id="tutorialBtn" onclick="var g=(window._effectiveGameKey?window._effectiveGameKey():null)||sessionStorage.getItem('game');if(typeof showGameTutorial==='function')showGameTutorial(g);">查看规则</button>
+            <div class="room-identity">
+              <span class="waiting-section-label">ROOM / 房间码</span>
+              <div class="room-code-row"><strong id="primaryRoomCode">----</strong><button class="copy-button" id="copyRoomCode" type="button">复制房间码</button></div>
+              <span class="room-invite-label">邀请链接</span>
+              <div class="invite-row"><input id="inviteLink" type="text" readonly aria-label="邀请链接"><button class="copy-button" id="copyInviteLink" type="button">复制邀请链接</button></div>
+            </div>
             <div class="qr-card" id="qrArea">
-              <img id="qrImage" src="" alt="QR">
+              <img id="qrImage" src="" alt="加入房间的二维码">
               <div class="qr-room-code" id="qrRoomCode"></div>
               <div class="qr-hint">扫码或输入房间号加入</div>
             </div>
+            <button class="btn btn-outline btn-sm rules-btn" id="tutorialBtn" onclick="var g=(window._effectiveGameKey?window._effectiveGameKey():null)||sessionStorage.getItem('game');if(typeof showGameTutorial==='function')showGameTutorial(g);">查看规则</button>
           </aside>
         </div>
       </div>
@@ -104,6 +118,7 @@
         <div class="board-wrap stage-board"><div id="boardArea"></div></div>
         <div class="game-actions-fixed refresh" id="gameActions" style="display:none">
           <button class="btn btn-outline btn-sm" onclick="window.doRestart()">重新开始</button>
+          <button class="btn btn-outline btn-sm" onclick="window.doReturnToRoom()">返回房间</button>
         </div>
       </section>
     </section>
@@ -142,6 +157,9 @@
   <script src="/js/renderers/uno.js"></script>
   <script src="/js/renderers/davinci.js"></script>
   <script src="/js/renderers/exploding-kittens.js"></script>
+  <script src="/js/rummikub-order.js"></script>
+  <script src="/js/rummikub-activity.js"></script>
+  <script src="/js/renderers/rummikub-activity.js"></script>
   <script src="/js/renderers/rummikub.js"></script>
   <script src="/js/renderers/twentyfour.js"></script>
   <script src="/js/renderers/sudoku.js"></script>

@@ -4,6 +4,9 @@
 exports.name = 'rummikub';
 exports.maxPlayers = 4;
 const { pick } = require('./lib/i18n');
+const { normalizeTableSet } = require('../public/js/rummikub-order');
+const { randomUUID } = require('node:crypto');
+const Activity = require('../public/js/rummikub-activity');
 
 const COLORS = ['black', 'blue', 'red', 'orange'];
 const COLOR_NAMES = { black: '黑', blue: '蓝', red: '红', orange: '橙' };
@@ -55,7 +58,46 @@ exports.createState = () => ({
   savedHand: null,    // snapshot for cancel
   savedHandIds: null, // IDs of original hand tiles to verify at least one used
   passesSinceLastPlay: 0, // consecutive passes while pool empty — draw detection
+  timeline: [],
+  timelineSeq: 0,
+  timelineId: null,   // unique match identity; sequence restarts on a new match
+  chatAt: {},        // server-only shared chat/reaction cooldown by authenticated seat
 });
+
+function recordEvent(state, type, player = null, data = {}) {
+  if (!Array.isArray(state.timeline)) state.timeline = [];
+  const event = Activity.publicEvent({seq:(state.timelineSeq || 0) + 1, type, player, time:Date.now(), data});
+  if (!event) return;
+  state.timelineSeq = event.seq;
+  state.timeline.push(event);
+  if (state.timeline.length > Activity.TIMELINE_MAX) state.timeline.splice(0, state.timeline.length - Activity.TIMELINE_MAX);
+}
+
+function finishEvent(state) { recordEvent(state, 'game_end', null, {winner:state.winner}); }
+exports.recordTurn = function(state, player) {
+  if (state.timelineId && state.hands.length && state.winner === null) recordEvent(state, 'turn', player);
+};
+
+function socialMove(data, state, playerIndex) {
+  if (!Number.isInteger(playerIndex) || playerIndex < 0 || playerIndex >= state.hands.length) return 'rk_chat_bad_player';
+  if (!state.timelineId) return 'rk_chat_not_started';
+  let content;
+  if (data.action === 'chat') {
+    if (typeof data.text !== 'string') return 'rk_chat_empty';
+    content = Activity.normalizeChat(data.text);
+    if (!content) return 'rk_chat_empty';
+    if (Array.from(content).length > Activity.CHAT_MAX) return 'rk_chat_too_long';
+  } else {
+    if (!Activity.REACTIONS.includes(data.emoji)) return 'rk_reaction_invalid';
+    content = data.emoji;
+  }
+  const now = Date.now();
+  if (!state.chatAt) state.chatAt = {};
+  if (Object.hasOwn(state.chatAt, playerIndex) && now - state.chatAt[playerIndex] < Activity.CHAT_GAP) return 'rk_chat_too_fast';
+  state.chatAt[playerIndex] = now;
+  recordEvent(state, data.action, playerIndex, data.action === 'chat' ? {text:content} : {emoji:content});
+  return null;
+}
 
 function initGame(state, playerCount) {
   const tiles = createTiles();
@@ -78,6 +120,11 @@ function initGame(state, playerCount) {
   state.savedHand = null;
   state.savedHandIds = null;
   state.passesSinceLastPlay = 0;
+  state.timeline = [];
+  state.timelineSeq = 0;
+  state.timelineId = randomUUID();
+  state.chatAt = {};
+  recordEvent(state, 'game_start');
 }
 exports.initGame = initGame;
 
@@ -162,6 +209,9 @@ function canAddToSet(tile, set) {
 }
 
 exports.handleMove = (data, state, playerIndex) => {
+  // Social messages are accepted independently of game phase/turn ownership.
+  // The room server authenticates the sender and excludes lobby messages.
+  if (data && (data.action === 'chat' || data.action === 'reaction')) return socialMove(data, state, playerIndex);
   if (state.winner !== null) return 'g_game_over';
 
   if (state.hands.length === 0) {
@@ -254,9 +304,14 @@ exports.handleMove = (data, state, playerIndex) => {
       state.savedHandIds = null;
       state.phase = 'play';
 
+      recordEvent(state, 'manipulate', playerIndex, {
+        usedHandTilesCount: allTiles.filter(t => handIds.has(t.id)).length,
+      });
+
       if (state.hands[playerIndex].length === 0) {
         state.winner = playerIndex;
         state.phase = 'over';
+        finishEvent(state);
       }
       return null;
     }
@@ -290,6 +345,8 @@ exports.handleMove = (data, state, playerIndex) => {
     if (endTurn && state.playedThisTurn[playerIndex]) {
       state.playedThisTurn[playerIndex] = false;
       state.currentPlayer = (state.currentPlayer + 1) % state.hands.length;
+      recordEvent(state, 'end_turn', playerIndex);
+      if (state.currentPlayer !== playerIndex) recordEvent(state, 'turn', state.currentPlayer);
       return null;
     }
 
@@ -299,17 +356,20 @@ exports.handleMove = (data, state, playerIndex) => {
         hand.push(state.pool.pop());
         sortHand(hand);
         state.passesSinceLastPlay = 0;
+        recordEvent(state, 'draw', playerIndex);
       } else {
         // Pool empty — increment stalemate counter
         state.passesSinceLastPlay++;
         if (state.passesSinceLastPlay >= state.hands.length) {
           state.winner = -1; // draw
           state.phase = 'over';
+          finishEvent(state);
           return null;
         }
       }
       state.playedThisTurn[playerIndex] = false;
       state.currentPlayer = (state.currentPlayer + 1) % state.hands.length;
+      if (state.currentPlayer !== playerIndex) recordEvent(state, 'turn', state.currentPlayer);
       return null;
     }
 
@@ -339,14 +399,16 @@ exports.handleMove = (data, state, playerIndex) => {
           const idx = hand.findIndex(t => t.id === id);
           hand.splice(idx, 1);
         }
-        state.table.push(toPlay);
+        state.table.push(normalizeTableSet(toPlay));
         state.hasBroken[playerIndex] = true;
         state.playedThisTurn[playerIndex] = true;
         state.passesSinceLastPlay = 0;
+        recordEvent(state, 'play_set', playerIndex, {tiles:state.table[state.table.length - 1]});
 
         if (hand.length === 0) {
           state.winner = playerIndex;
           state.phase = 'over';
+          finishEvent(state);
           return null;
         }
         // Player can continue, manipulate, or end turn
@@ -365,18 +427,19 @@ exports.handleMove = (data, state, playerIndex) => {
         hand.splice(idx, 1);
         set.push(tile);
 
-        // Re-sort if run
-        if (new Set(set.filter(t => !t.wild).map(t => t.color)).size === 1) {
-          set.sort((a, b) => a.num - b.num);
-        }
+        // Normal plays have a canonical visual order; keep this group's index.
+        // Manipulation submits above deliberately retain the submitted order.
+        state.table[targetSet] = normalizeTableSet(set);
 
         state.hasBroken[playerIndex] = true;
         state.playedThisTurn[playerIndex] = true;
         state.passesSinceLastPlay = 0;
+        recordEvent(state, 'add_to_set', playerIndex, {tile, targetSet});
 
         if (hand.length === 0) {
           state.winner = playerIndex;
           state.phase = 'over';
+          finishEvent(state);
           return null;
         }
         return null;
@@ -390,16 +453,19 @@ exports.handleMove = (data, state, playerIndex) => {
       hand.push(state.pool.pop());
       sortHand(hand);
       state.passesSinceLastPlay = 0;
+      recordEvent(state, 'draw', playerIndex);
     } else {
       state.passesSinceLastPlay++;
       if (state.passesSinceLastPlay >= state.hands.length) {
         state.winner = -1; // draw
         state.phase = 'over';
+        finishEvent(state);
         return null;
       }
     }
     state.playedThisTurn[playerIndex] = false;
     state.currentPlayer = (state.currentPlayer + 1) % state.hands.length;
+    if (state.currentPlayer !== playerIndex) recordEvent(state, 'turn', state.currentPlayer);
     return null;
   }
 

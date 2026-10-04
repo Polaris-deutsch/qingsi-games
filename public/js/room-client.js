@@ -2,7 +2,7 @@
 (function() {
   const el = {};
   function cacheElements() {
-    ['notifyBar','status','overlay','boardArea','waitingRoom','waitingSlots','waitingStatus','playerBar','resultOverlay','resultText','resultSub','gameStage','gameActions','profileEdit','emojiRow','avatarDrawer','readyBtn','startGameBtn','addBotBtn','gameOptions','seatSwapModal','seatSwapGrid','seatSwapHint','nameInput','avatarEmoji','qrImage','qrRoomCode','roomBadge'].forEach(function(id) {
+    ['notifyBar','status','overlay','boardArea','waitingRoom','waitingSlots','waitingStatus','playerBar','resultOverlay','resultText','resultSub','gameStage','gameActions','profileEdit','emojiRow','avatarDrawer','readyBtn','startGameBtn','addBotBtn','gameOptions','seatSwapModal','seatSwapGrid','seatSwapHint','nameInput','avatarEmoji','qrImage','qrRoomCode','roomBadge','primaryRoomCode','inviteLink','connectionIndicator','connectionText'].forEach(function(id) {
       el[id] = document.getElementById(id);
     });
   }
@@ -16,13 +16,17 @@
 
   let ws, state, players, currentRenderer;
   let currentRendererKey = null;  // 麻将四川/广东切换时据此重新 init
+  let rummikubResultKey = null;
   let roomPhase = 'lobby';   // 'lobby' | 'ready' | 'playing'
   let isHost = false;
   let myReady = false;
+  let hasJoinedOnce = false;
   let terminalRoomError = false;
   let seatSwapFromIndex = null;
 
-  el.roomBadge.textContent = roomId;
+  el.roomBadge.textContent = roomId || '----';
+  if (el.primaryRoomCode) el.primaryRoomCode.textContent = roomId || '----';
+  if (el.inviteLink && roomId) el.inviteLink.value = location.origin + '/?room=' + encodeURIComponent(roomId);
 
   // Games whose bots read state._options.difficulty (via difficulty.js)
   window._gamesWithDifficulty = ['reversi','gomoku','chess','connect4','checkers','chinesechess','go9','hearts','battleship'];
@@ -40,14 +44,24 @@
   let prevPlayerCount = 0;
   const gameInfo = _gt(game);
 
-  function notify(msg) {
+  function uiText(zh, en) { return window.__ACTIVE_LANG === 'en' ? en : zh; }
+
+  function setConnectionState(state) {
+    if (!el.connectionIndicator || !el.connectionText) return;
+    el.connectionIndicator.dataset.state = state;
+    el.connectionText.textContent = state === 'connected' ? uiText('已连接', 'CONNECTED') :
+      state === 'restoring' ? uiText('正在恢复房间…', 'RESTORING…') : uiText('连接中…', 'CONNECTING…');
+  }
+
+  function notify(msg, kind) {
     const bar = el.notifyBar;
     if (!bar) return;
     bar.textContent = msg;
-    bar.style.transform = 'translateY(0)';
+    bar.dataset.kind = kind || 'info';
+    bar.style.transform = 'translate(-50%, 0)';
     clearTimeout(bar._timer);
     bar._timer = setTimeout(function() {
-      bar.style.transform = 'translateY(-100%)';
+      bar.style.transform = 'translate(-50%, -140%)';
       bar._timer = null;
     }, 2500);
   }
@@ -57,6 +71,34 @@
     notify(msg);
   };
   function showToast(msg) { notify(msg); }
+
+  function copyText(value) {
+    if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(value);
+    var input = document.createElement('textarea');
+    input.value = value;
+    input.style.position = 'fixed';
+    input.style.opacity = '0';
+    document.body.appendChild(input);
+    input.select();
+    try {
+      return document.execCommand('copy') ? Promise.resolve() : Promise.reject(new Error('copy failed'));
+    } catch (error) {
+      return Promise.reject(error);
+    } finally {
+      input.remove();
+    }
+  }
+
+  function bindCopyButton(id, getValue, successText) {
+    var button = document.getElementById(id);
+    if (!button) return;
+    button.addEventListener('click', function() {
+      copyText(getValue()).then(function() { notify(successText(), 'success'); })
+        .catch(function() { notify(uiText('复制失败，请手动选择复制。', 'Could not copy. Please select and copy manually.'), 'error'); });
+    });
+  }
+  bindCopyButton('copyRoomCode', function() { return roomId || ''; }, function() { return uiText('房间码已复制', 'Room code copied'); });
+  bindCopyButton('copyInviteLink', function() { return el.inviteLink.value; }, function() { return uiText('邀请链接已复制', 'Invite link copied'); });
   function tf(key) { var args = Array.prototype.slice.call(arguments, 1); return String(_t(key)).replace(/%s/g, function() { return args.shift(); }); }
 
   function escapeHtml(str) {
@@ -86,7 +128,7 @@
     var nd = document.getElementById(id);
     if (!nd) return;
     nd.innerHTML = values.filter(Boolean).map(function(value) {
-      return '<span>' + value + '</span>';
+      return '<span>' + escapeHtml(value) + '</span>';
     }).join('');
   }
 
@@ -94,7 +136,7 @@
     var nd = document.getElementById(id);
     if (!nd) return;
     nd.innerHTML = values.filter(Boolean).map(function(value) {
-      return '<span class="meta-pill">' + value + '</span>';
+      return '<span class="meta-pill">' + escapeHtml(value) + '</span>';
     }).join('');
   }
 
@@ -134,8 +176,8 @@
       btn.disabled = i === fromIndex;
       btn.innerHTML =
         '<div class="seat-swap-slot">' + _t('seat_label') + (i + 1) + '</div>' +
-        '<div class="seat-swap-player">' + summary.title + '</div>' +
-        '<div class="seat-swap-tags">' + summary.meta + '</div>';
+        '<div class="seat-swap-player">' + escapeHtml(summary.title) + '</div>' +
+        '<div class="seat-swap-tags">' + escapeHtml(summary.meta) + '</div>';
       btn.addEventListener('click', function() {
         const toIdx = parseInt(this.dataset.seatIndex, 10);
         if (Number.isNaN(toIdx) || toIdx === seatSwapFromIndex) return;
@@ -169,7 +211,7 @@
     renderMetaPills('waitingMeta', [gameInfo.category, gameInfo.players, gameInfo.duration]);
     renderFacts('stageMeta', [gameInfo.category, gameInfo.players, gameInfo.duration]);
     // Show connecting status until first server response arrives
-    document.title = 'GameNest — ' + _t('room');
+    document.title = 'QingSi Games — ' + _t('room');
     el.waitingStatus.textContent = _t('connecting_room');
   }
 
@@ -177,6 +219,12 @@
   function send(type, data) {
     if (ws && ws.readyState === 1) {
       ws.send(JSON.stringify(data === undefined ? { type } : { type, data }));
+    }
+  }
+
+  function resetRummikubFeedback() {
+    if (game === 'rummikub' && currentRenderer && currentRenderer.resetFeedback) {
+      currentRenderer.resetFeedback();
     }
   }
 
@@ -211,13 +259,26 @@
     }
     var restartBtns = document.querySelectorAll('#gameActions .btn-outline');
     if (restartBtns.length > 0) restartBtns[0].textContent = _t('restart');
-    document.title = gameInfo ? (gameInfo.name || 'GameNest') : 'GameNest';
+    if (restartBtns.length > 1) restartBtns[1].textContent = _t('return_to_room');
+    var copyCode = document.getElementById('copyRoomCode');
+    if (copyCode) copyCode.textContent = uiText('复制房间码', 'Copy code');
+    var copyInvite = document.getElementById('copyInviteLink');
+    if (copyInvite) copyInvite.textContent = uiText('复制邀请链接', 'Copy invite link');
+    var roomCodeLabel = document.querySelector('.room-identity .waiting-section-label');
+    if (roomCodeLabel) roomCodeLabel.textContent = uiText('ROOM / 房间码', 'ROOM CODE');
+    var inviteLabel = document.querySelector('.room-invite-label');
+    if (inviteLabel) inviteLabel.textContent = uiText('邀请链接', 'Invite link');
+    var profileLabel = document.querySelector('.profile-name-field span');
+    if (profileLabel) profileLabel.textContent = uiText('你的名字', 'Your name');
+    document.title = 'QingSi Games — ' + (gameInfo ? gameInfo.name : _t('room'));
   }
   i18nStatic();
 
   function connect() {
     if (ws) { try { ws.close(); } catch(e) {} }
     ws = new WebSocket(getSocketURL());
+    const socket = ws;
+    setConnectionState(hasJoinedOnce ? 'restoring' : 'connecting');
     ws.onopen = () => send('join_room', { roomId, resumeToken, lang: window.__ACTIVE_LANG || 'zh' });
 
     const handlers = {
@@ -257,6 +318,8 @@
         renderGame();
       },
       game_started(msg) {
+        resetRummikubFeedback();
+        if (game === 'rummikub' && currentRenderer && currentRenderer.resetHandOrder) currentRenderer.resetHandOrder();
         state = msg.state;
         players = msg.players;
         window._players = players;
@@ -316,6 +379,11 @@
         handlePlayerChange(msg, 'player_left');
       },
       error(msg) {
+        if (game === 'rummikub' && currentRenderer && currentRenderer.activityError &&
+            /^rk_(chat_|reaction_)/.test(msg.code || '')) {
+          currentRenderer.activityError(msg.code, msg.message);
+          return;
+        }
         if (msg.code === 'ROOM_NOT_FOUND' || (!state && /房间不存在|房间已结束/.test(msg.message || ''))) {
           clearExpiredRoomAndReturn();
           return;
@@ -333,6 +401,7 @@
           showToast(_t('uno_opponent_turn'));
           return;
         }
+        notify(msg.message || uiText('操作未完成，请重试。', 'Action failed. Please try again.'), 'error');
         const ws2 = el.waitingStatus;
         if (ws2) {
           ws2.textContent = msg.message;
@@ -345,12 +414,17 @@
     };
 
     function handleRoomJoined(msg) {
+      resetRummikubFeedback();
+      var wasRestoring = hasJoinedOnce;
       state = msg.state || state;
       players = msg.players || players;
       window._players = players;
       roomPhase = msg.phase || 'lobby';
       if (msg.options) roomOptions = msg.options;
       if (msg.resumeToken) sessionStorage.setItem('resumeToken', msg.resumeToken);
+      setConnectionState('connected');
+      if (wasRestoring) notify(uiText('房间已恢复', 'Room restored'), 'success');
+      hasJoinedOnce = true;
       updateWaitingRoom();
       if (roomPhase === 'playing') {
         showGame();
@@ -391,7 +465,7 @@
       if (msg.type !== 'error') {
         var bar = el.notifyBar;
         if (bar && bar._timer === 0) {
-          bar.style.transform = 'translateY(-100%)';
+          bar.style.transform = 'translate(-50%, -140%)';
           bar._timer = null;
         }
       }
@@ -400,18 +474,22 @@
       if (handler) handler(msg);
     };
     ws.onclose = () => {
+      if (ws !== socket) return;
+      resetRummikubFeedback();
       if (!terminalRoomError) {
+        setConnectionState(hasJoinedOnce ? 'restoring' : 'connecting');
         var bar = el.notifyBar;
         if (bar) {
-          bar.textContent = _t('reconnecting') || 'Disconnected. Reconnecting…';
-          bar.style.transform = 'translateY(0)';
+          bar.textContent = hasJoinedOnce ? uiText('连接断开，正在恢复房间…', 'Disconnected. Restoring room…') : uiText('连接中…', 'Connecting…');
+          bar.dataset.kind = 'warning';
+          bar.style.transform = 'translate(-50%, 0)';
           clearTimeout(bar._timer);
           bar._timer = 0;
         }
         setTimeout(connect, 1500);
       }
     };
-    ws.onerror = () => {};
+    ws.onerror = () => { if (ws === socket) setConnectionState(hasJoinedOnce ? 'restoring' : 'connecting'); };
   }
 
   // ---- UI Toggle ----
@@ -430,6 +508,7 @@
   }
 
   function showGame() {
+    if (game === 'rummikub') document.body.classList.add('rk-playing');
     el.waitingRoom.style.display = 'none';
     el.profileEdit.style.display = 'none';
     el.emojiRow.style.display = 'none';
@@ -442,6 +521,10 @@
   }
 
   function showLobby() {
+    if (game === 'rummikub') {
+      document.body.classList.remove('rk-playing');
+      resetRummikubFeedback();
+    }
     setImmersiveLandscape(false);
     el.waitingRoom.style.display = '';
     el.profileEdit.style.display = 'flex';
@@ -539,38 +622,40 @@
       if (player) {
         const isMe = player.index === playerIndex && !player.isBot;
         const meClass = isMe ? ' me' : '';
-        const botClass = player.isBot ? ' ai' : '';
         const disconnected = !player.isBot && player.connected === false;
         let tagsHtml = '';
-        if (player.isHost) tagsHtml += '<span class="waiting-slot-badge host">👑 ' + _t('host') + '</span>';
+        if (player.isHost) tagsHtml += '<span class="waiting-slot-badge host">' + _t('host') + '</span>';
+        if (isMe) tagsHtml += '<span class="waiting-slot-badge you">' + _t('you') + '</span>';
         if (player.isBot) {
-          tagsHtml += '<span class="waiting-slot-badge ai">🤖 AI</span>';
-          if (isHost) tagsHtml += '<button class="waiting-slot-xbtn" data-bot-index="' + i + '" title="' + _t('remove_bot') + '">✕</button>';
+          tagsHtml += '<span class="waiting-slot-badge ai">BOT</span>';
+          if (isHost) tagsHtml += '<button class="waiting-slot-xbtn" data-bot-index="' + i + '" aria-label="' + _t('remove_bot') + '">✕</button>';
         } else if (disconnected) {
-          tagsHtml += '<span class="waiting-slot-badge" style="background:#fff3e0;color:#e67e22">📱 ' + _t('in_lobby') + '</span>';
+          tagsHtml += '<span class="waiting-slot-badge disconnected">' + uiText('已断线', 'DISCONNECTED') + '</span>';
         } else if (player.ready) {
           tagsHtml += '<span class="waiting-slot-badge ready">✓ ' + _t('ready_status') + '</span>';
         } else {
-          tagsHtml += '<span class="waiting-slot-badge">' + _t('not_ready') + '</span>';
+          tagsHtml += '<span class="waiting-slot-badge not-ready">○ ' + _t('not_ready') + '</span>';
         }
         // 房主可移出真人玩家（不能踢自己/房主）
         if (isHost && !player.isBot && !player.isHost) {
-          tagsHtml += '<button class="waiting-slot-xbtn" data-kick-index="' + i + '" title="' + _t('kick_player') + '">✕</button>';
+          tagsHtml += '<button class="waiting-slot-xbtn" data-kick-index="' + i + '" aria-label="' + _t('kick_player') + '">✕</button>';
         }
         html +=
-          '<div class="waiting-slot occupied' + meClass + '">' +
+          '<div class="waiting-slot occupied' + meClass + (disconnected ? ' disconnected' : '') + '">' +
+            '<span class="waiting-slot-number">' + String(i + 1).padStart(2, '0') + '</span>' +
             '<div class="waiting-slot-avatar" style="background:' + getSlotColor(i) + '">' +
-              (player.avatar || (player.isBot ? '🤖' : '😊')) +
+              escapeHtml(player.avatar || (player.isBot ? '🤖' : '😊')) +
             '</div>' +
             '<div class="waiting-slot-info">' +
-              '<div class="waiting-slot-name">' + player.name + (isMe ? ' (' + _t('you') + ')' : '') + '</div>' +
+              '<div class="waiting-slot-name">' + escapeHtml(player.name) + '</div>' +
               '<div class="waiting-slot-tags">' + tagsHtml + '</div>' +
             '</div>' +
-            '<button class="waiting-slot-swap" data-from="' + i + '" title="⇅">⇅</button>' +
+            '<button class="waiting-slot-swap" data-from="' + i + '" aria-label="' + _t('swap_seat') + '">⇅</button>' +
           '</div>';
       } else {
         html +=
           '<div class="waiting-slot empty">' +
+            '<span class="waiting-slot-number">' + String(i + 1).padStart(2, '0') + '</span>' +
             '<div class="waiting-slot-avatar" style="background:#bbb">' + (i + 1) + '</div>' +
             '<div class="waiting-slot-info">' +
               '<div class="waiting-slot-name" style="color:var(--text-muted)">' + _t('waiting') + '</div>' +
@@ -986,6 +1071,7 @@
         readyBtn.textContent = _t('ready');
         readyBtn.classList.remove('ready-active');
       }
+      readyBtn.setAttribute('aria-pressed', myReady ? 'true' : 'false');
       readyBtn.onclick = function() {
         send('player_ready');
         myReady = !myReady;
@@ -1086,7 +1172,9 @@
       tag.className = 'player-tag p' + p.index;
       if (state && state.currentPlayer === p.index) tag.classList.add('active');
       const avatar = p.avatar || (p.isBot ? '\u{1F916}' : '\u{1F60A}');
-      tag.innerHTML = '<span class="dot"></span><span class="player-tag-avatar">' + avatar + '</span><span class="player-tag-name">' + p.name + (p.isBot ? ' \u{1F916}' : '') + '</span>';
+      tag.innerHTML = '<span class="dot"></span><span class="player-tag-avatar"></span><span class="player-tag-name"></span>';
+      tag.querySelector('.player-tag-avatar').textContent = avatar;
+      tag.querySelector('.player-tag-name').textContent = p.name + (p.isBot ? ' \u{1F916}' : '');
       // Tap to show name tooltip (works on touch + mouse)
       tag.addEventListener('click', function(e) {
         e.stopPropagation();
@@ -1149,7 +1237,13 @@
     }
     window.gamePlayers = players;
     if (currentRenderer) currentRenderer.render(state, el.boardArea, playerIndex, state.winner);
-    if (state.winner !== null && state.winner !== undefined) showResult(state.winner);
+    if (game === 'rummikub') {
+      // Postgame chat still broadcasts state. Show each result once so these
+      // social updates do not reopen the overlay or reset its close timer.
+      var resultKey = state.winner == null ? null : state.timelineId + ':' + state.winner;
+      if (resultKey !== null && resultKey !== rummikubResultKey) showResult(state.winner);
+      rummikubResultKey = resultKey;
+    } else if (state.winner !== null && state.winner !== undefined) showResult(state.winner);
   }
 
   function showResult(winner) {

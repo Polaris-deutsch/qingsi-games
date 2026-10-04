@@ -93,7 +93,7 @@
     var status = document.getElementById('sbStatus'), players = document.getElementById('sbPlayers');
     if (players) players.innerHTML = state.snakes.map(function (snake, index) {
       var name = window.gamePlayers && window.gamePlayers[index] ? window.gamePlayers[index].name : _t('sb_player_prefix') + (index + 1);
-      return '<span class="sb-player' + (index === playerIndex ? ' sb-self' : '') + (!snake.alive ? ' sb-out' : '') + '"><i style="background:' + COLORS[index % COLORS.length] + '"></i>' + name + ' · ' + snake.score + '</span>';
+      return '<span class="sb-player' + (index === playerIndex ? ' sb-self' : '') + (!snake.alive ? ' sb-out' : '') + '"><i style="background:' + COLORS[index % COLORS.length] + '"></i>' + window.escapeGameHtml(name) + ' · ' + snake.score + '</span>';
     }).join('');
     if (!status) return;
     var me = state.snakes[playerIndex];

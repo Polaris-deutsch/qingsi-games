@@ -352,7 +352,7 @@
 
   // ---- Render waiting ----
   function renderWaiting(container, msg) {
-    container.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text-muted);font-size:15px;">' + (msg || _t('dg_waiting_default')) + '</div>';
+    container.innerHTML = '<div style="padding:60px 20px;text-align:center;color:var(--text-muted);font-size:15px;">' + window.escapeGameHtml(msg || _t('dg_waiting_default')) + '</div>';
   }
 
   function renderStage(container, task) {
@@ -381,8 +381,8 @@
   function renderStageResult(container, st) {
     clearInterval(timerInterval); container.innerHTML = '';
     var box = document.createElement('div'); box.style.cssText = 'margin:32px auto;padding:24px;max-width:420px;text-align:center;background:#fff9ee;border-radius:16px;font-size:16px;';
-    var scores = (st.scores || []).map(function(s, i) { var n = window._players && window._players[i] ? window._players[i].name : (_t('dg_player_fallback') + (i + 1)); return n + ' ' + s + _t('dg_points_suffix'); }).join(' · ');
-    box.innerHTML = '<div style="font-size:22px;font-weight:800">' + _t('dg_answer_label') + (st.word || '') + '</div><div style="margin-top:12px;color:var(--text-muted)">' + scores + '</div><div style="margin-top:12px">' + _t('dg_next_round_soon') + '</div>';
+    var scores = (st.scores || []).map(function(s, i) { var n = window._players && window._players[i] ? window._players[i].name : (_t('dg_player_fallback') + (i + 1)); return window.escapeGameHtml(n) + ' ' + s + _t('dg_points_suffix'); }).join(' · ');
+    box.innerHTML = '<div style="font-size:22px;font-weight:800">' + _t('dg_answer_label') + window.escapeGameHtml(st.word || '') + '</div><div style="margin-top:12px;color:var(--text-muted)">' + scores + '</div><div style="margin-top:12px">' + _t('dg_next_round_soon') + '</div>';
     container.appendChild(box);
   }
 
@@ -540,11 +540,11 @@
     var starterName = window._players && window._players[starter] ? window._players[starter].name : (_t('dg_player_fallback') + (starter + 1));
     var rows = (st.scores || []).map(function(score, index) {
       var name = window._players && window._players[index] ? window._players[index].name : (_t('dg_player_fallback') + (index + 1));
-      return '<div style="display:flex;justify-content:space-between;padding:7px 4px;border-bottom:1px solid rgba(200,164,92,.18);"><span>' + name + '</span><strong>' + score + ' ' + _t('dg_points_suffix') + '</strong></div>';
+      return '<div style="display:flex;justify-content:space-between;padding:7px 4px;border-bottom:1px solid rgba(200,164,92,.18);"><span>' + window.escapeGameHtml(name) + '</span><strong>' + score + ' ' + _t('dg_points_suffix') + '</strong></div>';
     }).join('');
     if (isFinal) {
       var winnerName = window._players && window._players[st.winner] ? window._players[st.winner].name : (_t('dg_player_fallback') + ((st.winner || 0) + 1));
-      box.innerHTML = '<div style="font-size:24px;font-weight:800">🏆 ' + winnerName + _t('dg_wins') + '</div><div style="margin:8px 0 16px;color:var(--text-muted)">' + _t('dg_final_scores') + '</div>' + rows;
+      box.innerHTML = '<div style="font-size:24px;font-weight:800">🏆 ' + window.escapeGameHtml(winnerName) + _t('dg_wins') + '</div><div style="margin:8px 0 16px;color:var(--text-muted)">' + _t('dg_final_scores') + '</div>' + rows;
     } else {
       var gained = result.scoreAwarded || 0;
       var matched = st.transmissionResult === 'match';
@@ -552,9 +552,9 @@
       var nextName = window._players && window._players[nextIndex] ? window._players[nextIndex].name : (_t('dg_player_fallback') + (nextIndex + 1));
       box.innerHTML = '<div style="font-size:21px;font-weight:800">' + _t('dg_round_prefix') + st.round + _t('dg_round_result_suffix') + '</div>' +
         '<div style="margin:10px 0;padding:10px;border-radius:10px;background:' + (matched ? '#ecf9ef' : '#fff5f2') + ';color:' + (matched ? '#23864a' : '#c95f3c') + ';font-weight:700">' +
-        (matched ? _t('dg_transmission_match') : _t('dg_transmission_drift')) + ' · ' + starterName + ' +' + gained + ' ' + _t('dg_points_suffix') + '</div>' +
+        (matched ? _t('dg_transmission_match') : _t('dg_transmission_drift')) + ' · ' + window.escapeGameHtml(starterName) + ' +' + gained + ' ' + _t('dg_points_suffix') + '</div>' +
         '<div style="text-align:left;margin-top:10px">' + rows + '</div>' +
-        '<div style="margin-top:16px;color:var(--text-muted);font-size:13px">' + _t('dg_next_round_by_prefix') + nextName + _t('dg_next_round_by_suffix') + '</div>';
+        '<div style="margin-top:16px;color:var(--text-muted);font-size:13px">' + _t('dg_next_round_by_prefix') + window.escapeGameHtml(nextName) + _t('dg_next_round_by_suffix') + '</div>';
       startTimer(box, st.stepRemainingMs, null);
     }
     container.appendChild(box);

@@ -169,6 +169,12 @@ module.exports = {
   'tx_not_enough_chips': '筹码不足',
 
   // Rummikub (rk_)
+  'rk_chat_empty': '请输入非空消息',
+  'rk_chat_too_long': '消息最多 120 个字符',
+  'rk_chat_too_fast': '发送太快，请稍等片刻',
+  'rk_reaction_invalid': '不支持这个表情',
+  'rk_chat_bad_player': '无效的消息发送者',
+  'rk_chat_not_started': '请在本局游戏页面发送消息',
   'rk_submit_at_least_one_set': '请至少提交一个牌组',
   'rk_invalid_set': '牌组格式错误',
   'rk_invalid_tile': '牌组中有无效牌',

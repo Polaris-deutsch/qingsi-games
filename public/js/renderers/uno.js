@@ -108,6 +108,7 @@
   window.gameRenderers.set('uno', {
 
     init: function(container) {
+      lastChallengeState = null;
       // Inject styles once
       injectStylesOnce('unoRendererStyles', STYLES);
 
@@ -246,7 +247,7 @@
       html += '' +
         '<div class="uno-opponent' + active + '">' +
           '<div class="opp-top">' +
-            '<span>' + ((window.gamePlayers && window.gamePlayers[i]) ? window.gamePlayers[i].name : tf('uno_player', i+1)) +
+            '<span>' + window.escapeGameHtml((window.gamePlayers && window.gamePlayers[i]) ? window.gamePlayers[i].name : tf('uno_player', i+1)) +
               (called ? ' <span style="background:#2ecc71;color:#fff;font-size:9px;padding:1px 5px;border-radius:6px;font-weight:700;">UNO</span>' : '') +
               (notCalled ? ' <span style="color:#e74c3c;font-size:9px;font-weight:700;">' + t('uno_uno_warning') + '</span>' : '') +
             '</span>' +
@@ -401,7 +402,9 @@
     if (!ch && lastChallengeState) {
       var prev = lastChallengeState;
       lastChallengeState = null;
-      var hadMatch = (prev.handSnapshot || []).some(function(c) { return c.color === prev.priorColor; });
+      var result = state.lastChallengeResult;
+      if (!result || result.by !== prev.by) { overlay.style.display = 'none'; return; }
+      var hadMatch = result.hadMatch;
       var byName = (window.gamePlayers && window.gamePlayers[prev.by]) ? window.gamePlayers[prev.by].name : tf('uno_player', prev.by + 1);
       if (hadMatch) {
         showToast(tf('uno_challenge_result_cheat', byName)); // +4 player cheated, they draw 4

@@ -169,6 +169,12 @@ module.exports = {
   'tx_not_enough_chips': 'Not enough chips',
 
   // Rummikub (rk_)
+  'rk_chat_empty': 'Enter a non-empty message',
+  'rk_chat_too_long': 'Messages can contain up to 120 characters',
+  'rk_chat_too_fast': 'Sending too quickly. Please wait a moment',
+  'rk_reaction_invalid': 'This reaction is not supported',
+  'rk_chat_bad_player': 'Invalid message sender',
+  'rk_chat_not_started': 'Send messages from the current game page',
   'rk_submit_at_least_one_set': 'Submit at least one set',
   'rk_invalid_set': 'Invalid set format',
   'rk_invalid_tile': 'Invalid tile in set',

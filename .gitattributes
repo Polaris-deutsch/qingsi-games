@@ -1,0 +1,2 @@
+scripts/windows/*.cmd text eol=crlf
+scripts/windows/*.ps1 text eol=crlf
