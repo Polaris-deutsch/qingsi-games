@@ -33,6 +33,7 @@ async (page) => {
   const code = await page.locator('#primaryRoomCode').textContent();
   if (!/^[A-Z0-9]{3,4}$/.test(code)) throw new Error(`Invalid room code ${code}`);
   await page.waitForFunction(() => document.querySelector('#qrImage').naturalWidth > 0);
+  await page.waitForFunction(() => document.querySelector('#connectionIndicator').dataset.state === 'connected', null, { timeout: 8000 });
   if (await page.locator('#connectionText').textContent() !== '已连接') throw new Error('Room connection status missing');
   await page.waitForTimeout(500);
   await page.screenshot({ path: '/tmp/qingsi-smoke-room-1440.png' });

@@ -24,3 +24,18 @@
   their reconnect tokens; browser storage does not restore them.
 - LAN/Android real-device testing and the broader security audit remain
   separate from this production release.
+
+## Verification
+
+- JavaScript syntax: 174 files passed; full Node test suite: 367 passed.
+- Public homepage and `/api/health`: HTTP 200; health JSON identifies
+  `qingsi-games` and uses `Cache-Control: no-store`.
+- Core JavaScript and CSS responses match the release files. Cloudflare
+  inserts a hidden link in public HTML, so raw HTML hashes differ.
+- Chromium verified public WSS room creation, joining, readiness, game start,
+  return to room, and same-process reconnection.
+- Rummikub manual ordering and two-player chat passed; incoming chat preserves
+  the custom hand order. Desktop and mobile screenshots were inspected.
+- Lobby widths 375, 390, 430, 820, and 1440 passed overflow and control checks.
+- The UI smoke script now waits for the public room connection before checking
+  its label, avoiding an assertion race with asynchronous WSS establishment.
