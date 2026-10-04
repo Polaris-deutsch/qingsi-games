@@ -76,6 +76,7 @@ function harness({ sound = null, sort = null, blockedStorage = false } = {}) {
     hasPointerCapture(id) { return this.capture === id; }
     releasePointerCapture() { this.capture = null; }
     addEventListener(name, fn) { this.listeners[name] = fn; }
+    removeEventListener(name, fn) { if(this.listeners[name]===fn)delete this.listeners[name]; }
     setAttribute(name, value) { this.attributes[name] = value; }
     appendChild(node) { this.nodes.push(node); node.parentElement = this; if (node.id) ids.set(node.id, node); }
     click() {
@@ -114,6 +115,8 @@ function harness({ sound = null, sort = null, blockedStorage = false } = {}) {
   vm.runInContext(fs.readFileSync(path.join(root, 'public/js/style-utils.js'), 'utf8'), context);
   context.injectStylesOnce = window.injectStylesOnce;
   vm.runInContext(fs.readFileSync(path.join(root, 'public/js/rummikub-order.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'public/js/activity-protocol.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(root, 'public/js/ui/activity-feed.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'public/js/rummikub-activity.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'public/js/renderers/rummikub-activity.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(root, 'public/js/renderers/rummikub.js'), 'utf8'), context);
@@ -152,7 +155,7 @@ function harness({ sound = null, sort = null, blockedStorage = false } = {}) {
       events.get('pointerup')({pointerId:1}); el.click();
     },
     render: (state, index = 0) => renderer.render(state, container, index, state.winner),
-    gesture: () => events.get('pointerdown')(), node: id => document.getElementById(id),
+    gesture: () => events.get('pointerdown')(), node: id => id.startsWith('ga-') ? [...ids.values()].find(node=>node.classList.contains(id)) : document.getElementById(id),
     tiles: (id, cls) => document.getElementById(id).querySelectorAll('.' + cls),
     get chimes() { return chimes; }, get contexts() { return contexts; },
   };
@@ -436,60 +439,60 @@ test('another player’s submitted order supersedes local table tidy even with u
 });
 
 function activityState() {
-  const s=state();s.timelineId='match-test';s.timelineSeq=1;
-  s.timeline=[{seq:1,type:'game_start',player:null,time:1000,data:{}}];return s;
+  const s=state();s.matchId='match-test';s.activity.seq=1;
+  s.activity.items=[{seq:1,type:'rummikub.game_start',player:null,time:1000,data:{}}];return s;
 }
-function event(s,type,player,data={}) {s.timeline.push({seq:++s.timelineSeq,type,player,time:1000+s.timelineSeq,data});}
+function event(s,type,player,data={}) {s.activity.items.push({seq:++s.activity.seq,type:type==='chat'||type==='reaction'?type:'rummikub.'+type,player,time:1000+s.activity.seq,data});}
 
 test('off-turn incoming/own chats preserve manual order, selection, input identity, focus and cursor', () => {
   const h=harness(),s=activityState();h.render(s);h.drag('joker-0','red-4-a');h.pointerClick('red-4-a');
-  const order=handIds(h),tile=h.tiles('rkHand','rk-tile')[0],input=h.node('rkChatInput');input.value='还没写完';input.focus();input.selectionStart=2;input.selectionEnd=3;
+  const order=handIds(h),tile=h.tiles('rkHand','rk-tile')[0],input=h.node('ga-input');input.value='还没写完';input.focus();input.selectionStart=2;input.selectionEnd=3;
   event(s,'chat',1,{text:'hello'});h.render(s);
-  assert.deepEqual(handIds(h),order);assert.equal(h.tiles('rkHand','rk-tile')[0],tile);assert.equal(h.node('rkChatInput'),input);
+  assert.deepEqual(handIds(h),order);assert.equal(h.tiles('rkHand','rk-tile')[0],tile);assert.equal(h.node('ga-input'),input);
   assert.equal(h.document.activeElement,input);assert.equal(input.value,'还没写完');assert.equal(input.selectionStart,2);assert.equal(input.selectionEnd,3);
   event(s,'chat',0,{text:'other device'});h.render(s);assert.deepEqual(handIds(h),order);assert.equal(h.tiles('rkHand','selected').length,1);
 });
 
 test('activity appends stable nodes once; reconnect renders unseen historical reactions without animations or sound', () => {
-  const h=harness(),s=activityState();h.render(s);const first=h.node('rkFeed').querySelector('.rk-event');
-  event(s,'reaction',1,{emoji:'😂'});h.render(s);assert.equal(h.node('rkFeed').querySelectorAll('.rk-reaction-new').length,1);
-  h.render(s);assert.equal(h.node('rkFeed').querySelectorAll('.rk-event').length,2);assert.equal(h.node('rkFeed').querySelector('.rk-event'),first);
+  const h=harness(),s=activityState();h.render(s);const first=h.node('ga-feed').querySelector('.ga-item');
+  event(s,'reaction',1,{emoji:'😂'});h.render(s);assert.equal(h.node('ga-feed').querySelectorAll('.ga-reaction-new').length,1);
+  h.render(s);assert.equal(h.node('ga-feed').querySelectorAll('.ga-item').length,2);assert.equal(h.node('ga-feed').querySelector('.ga-item'),first);
   h.renderer.resetFeedback();event(s,'reaction',1,{emoji:'👍'});h.render(s);
-  assert.equal(h.node('rkFeed').querySelectorAll('.rk-reaction-new').length,0);assert.equal(h.chimes,0);assert.equal(h.node('rkFeedAnnouncement').textContent,'');
-  s.timelineId='new-match';s.timelineSeq=1;s.timeline=s.timeline.slice(0,1);h.render(s);
-  assert.equal(h.node('rkFeed').querySelectorAll('.rk-event').length,1);
+  assert.equal(h.node('ga-feed').querySelectorAll('.ga-reaction-new').length,0);assert.equal(h.chimes,0);assert.equal(h.node('ga-visually-hidden').textContent,'');
+  s.matchId='new-match';s.activity.seq=1;s.activity.items=s.activity.items.slice(0,1);h.render(s);
+  assert.equal(h.node('ga-feed').querySelectorAll('.ga-item').length,1);
 });
 
 test('history scrolling stays put on new events, exposes unread and scrolls only when requested or already near bottom', () => {
-  const h=harness(),s=activityState();h.render(s);const feed=h.node('rkFeed');feed.scrollHeight=1000;feed.clientHeight=100;feed.scrollTop=100;
-  event(s,'chat',1,{text:'new'});h.render(s);h.flushFrames();assert.equal(feed.scrollTop,100,'a pending layout callback must not override history scroll before its scroll event arrives');assert.equal(h.node('rkActivityUnread').textContent,'1');assert.equal(h.node('rkFeedLatest').hidden,false);
+  const h=harness(),s=activityState();h.render(s);const feed=h.node('ga-feed');feed.scrollHeight=1000;feed.clientHeight=100;feed.scrollTop=100;
+  event(s,'chat',1,{text:'new'});h.render(s);h.flushFrames();assert.equal(feed.scrollTop,100,'a pending layout callback must not override history scroll before its scroll event arrives');assert.equal(h.node('ga-unread').textContent,'1');assert.equal(h.node('ga-latest').hidden,false);
   h.renderer.resetFeedback();event(s,'reaction',1,{emoji:'👍'});h.render(s);assert.equal(feed.scrollTop,100,'reconnect should preserve history reading position');
-  h.node('rkFeedLatest').click();assert.equal(feed.scrollTop,1000);assert.equal(h.node('rkActivityUnread').hidden,true);
-  event(s,'turn',0);h.render(s);assert.equal(feed.scrollTop,1000);assert.equal(h.node('rkActivityUnread').hidden,true);
+  h.node('ga-latest').click();assert.equal(feed.scrollTop,1000);assert.equal(h.node('ga-unread').hidden,true);
+  event(s,'turn',0);h.render(s);assert.equal(feed.scrollTop,1000);assert.equal(h.node('ga-unread').hidden,true);
 });
 
 test('chat input Enter sends through makeGameMove, guards IME, keeps rejected drafts and clears only matching successful drafts', () => {
-  const h=harness(),s=activityState();s.currentPlayer=1;h.render(s);const input=h.node('rkChatInput');input.value='  你好  ';
+  const h=harness(),s=activityState();s.currentPlayer=1;h.render(s);const input=h.node('ga-input');input.value='  你好  ';
   const key={key:'Enter',isComposing:true,stopPropagation(){},preventDefault(){}};input.listeners.keydown(key);assert.equal(h.moves.length,0);
-  key.isComposing=false;input.listeners.keydown(key);assert.deepEqual(JSON.parse(JSON.stringify(h.moves[0])),{action:'chat',text:'你好'});assert.equal(input.value,'  你好  ');
-  h.renderer.activityError('rk_chat_too_fast','wait');assert.equal(input.value,'  你好  ');assert.equal(h.node('rkChatStatus').textContent,'wait');
+  key.isComposing=false;input.listeners.keydown(key);assert.deepEqual(JSON.parse(JSON.stringify(h.moves[0])),{action:'activity_chat',text:'你好'});assert.equal(input.value,'  你好  ');
+  h.renderer.activityError('activity_chat_fast','wait');assert.equal(input.value,'  你好  ');assert.equal(h.node('ga-status').textContent,'wait');
   h.advance(805);input.listeners.keydown(key);event(s,'chat',0,{text:'你好'});h.render(s);assert.equal(input.value,'');
   h.advance(805);input.value='sent';input.listeners.keydown(key);input.value='next draft';event(s,'chat',0,{text:'sent'});h.render(s);assert.equal(input.value,'next draft');
 });
 
 test('chat text and names are literal text nodes, never interpolated markup', () => {
   const h=harness(),s=activityState();const payload='<img src=x onerror=alert(1)><script>1</script>';event(s,'chat',1,{text:payload});h.render(s);
-  const row=h.node('rkFeed').querySelectorAll('.rk-event').at(-1);
-  assert.equal(row.querySelector('.rk-event-chat-text').textContent,payload);assert.equal(row.querySelector('.rk-event-title').textContent,'<guest>');
+  const row=h.node('ga-feed').querySelectorAll('.ga-item').at(-1);
+  assert.equal(row.querySelector('.ga-chat-text').textContent,payload);assert.equal(row.querySelector('.ga-title').textContent,'<guest>');
   assert.equal(row.innerHTML,'');assert.equal(h.moves.length,0);
 });
 
 test('matches from an older running server disable social actions instead of sending an unsupported game move', () => {
-  const h=harness(),s=state();delete s.timelineId;delete s.timeline;h.render(s);
-  assert.equal(h.node('rkChatSend').disabled,true);assert.equal(h.node('rkChatInput').disabled,true);
-  assert.equal(h.node('rkReactionToggle').disabled,true);assert.equal(h.node('rkChatStatus').textContent,'rk_chat_unavailable');
-  h.node('rkChatInput').value='hello';h.node('rkChatInput').listeners.keydown({key:'Enter',stopPropagation(){},preventDefault(){}});
-  h.node('rkReactionPicker').querySelectorAll('.rk-reaction-button')[0].click();
+  const h=harness(),s=state();delete s.matchId;delete s.activity;h.render(s);
+  assert.equal(h.node('ga-send').disabled,true);assert.equal(h.node('ga-input').disabled,true);
+  assert.equal(h.node('ga-emoji-toggle').disabled,true);assert.equal(h.node('ga-status').textContent,'activity_unavailable');
+  h.node('ga-input').value='hello';h.node('ga-input').listeners.keydown({key:'Enter',stopPropagation(){},preventDefault(){}});
+  h.node('ga-reactions').querySelectorAll('.ga-reaction-button')[0].click();
   assert.deepEqual(h.moves,[]);assert.equal(h.tiles('rkHand','rk-tile').length,s.hands[0].length,'existing game UI still works');
 });
 

@@ -16,6 +16,7 @@
   var _viewState = null;
   var _viewSelf = null;
   var _activity = null;
+  var _activityObserver = null;
   var _gameRenderKey = null;
   var _tableOrders = new Map(); // local, explicit group-internal display overrides
   var _lastOrderPhase = null;
@@ -503,9 +504,25 @@
     red: 'rk-tile-red', orange: 'rk-tile-orange'
   };
 
+  function layoutActivity() {
+    if (!_activity) return;
+    var host = document.getElementById('rkPlayLayout');
+    var tile = document.querySelector('#rkHand .rk-tile, #rkTable .rk-tile');
+    var tileWidth = tile && window.getComputedStyle ? parseFloat(window.getComputedStyle(tile).width) : 38;
+    // Reserve a readable 13-tile run before docking the shared panel beside the table.
+    var canFit = host.clientWidth >= 13*tileWidth+36+12+24+280+12+64;
+    host.classList.toggle('rk-activity-wide', canFit);
+    _activity.setDocked(canFit);
+  }
+  function destroyActivity() {
+    if (_activity) { _activity.destroy(); _activity = null; }
+    if (_activityObserver) { _activityObserver.disconnect(); _activityObserver = null; }
+    if (window.removeEventListener) window.removeEventListener('resize', layoutActivity);
+  }
+
   window.gameRenderers.set('rummikub', {
     init: function(container) {
-      if (_activity) { _activity.dispose(); _activity = null; }
+      destroyActivity();
       _gameRenderKey = null;
       injectStylesOnce('rkStyles', STYLES);
       resetFeedback();
@@ -544,11 +561,25 @@
           '<div class="rk-status" id="rkStatus"></div>' +
           '<div class="rk-turn-notice" id="rkTurnNotice" role="status" aria-live="polite" aria-atomic="true"></div>' +
         '</div>';
-      _activity = window.createRummikubActivity(document.getElementById('rkPlayLayout'), {
-        t: _t, tf: _tf,
-        name: function(index) { return window.getPlayerName ? window.getPlayerName(index) : _t('rk_player_prefix') + ' ' + (index + 1); },
-        send: function(data) { window.makeGameMove(data); }
+      var mount = document.getElementById('rkPlayLayout');
+      _activity = window.ActivityFeed.create({
+        mount: mount, docked: false, collapsed: true, disabled: true,
+        getPlayerName: function(index) { return window.getPlayerName ? window.getPlayerName(index) : _t('rk_player_prefix') + ' ' + (index + 1); },
+        formatEvent: window.formatRummikubActivity,
+        sendChat: function(text) { window.makeGameMove({action:'activity_chat', text:text}); },
+        sendReaction: function(emoji) { window.makeGameMove({action:'activity_reaction', emoji:emoji}); },
+        strings: {
+          title:_t('activity_title'),empty:_t('activity_empty'),placeholder:_t('activity_placeholder'),
+          send:_t('activity_send'),inputLabel:_t('activity_input_label'),reactions:_t('activity_reactions'),
+          collapse:_t('activity_collapse'),expand:_t('activity_expand'),ended:_t('activity_ended'),
+          chatEmpty:_t('activity_chat_empty'),chatTooLong:_t('activity_chat_too_long'),
+          newItems:function(count){return _tf('activity_new_items',count);},
+          sendReaction:function(emoji){return _tf('activity_send_reaction',emoji);}
+        }
       });
+      if(window.addEventListener)window.addEventListener('resize',layoutActivity);
+      if(window.ResizeObserver){_activityObserver=new window.ResizeObserver(layoutActivity);_activityObserver.observe(mount);}
+      layoutActivity();
       ensureActionButtons();
       renderSound();
       renderOrderControls();
@@ -565,13 +596,14 @@
       });
     },
 
+    destroy: destroyActivity,
     resetFeedback: resetFeedback,
     resetHandOrder: resetHandOrder,
-    activityError: function(code, message) { if (_activity) _activity.error(code, message); },
+    activityError: function(code, message) { if (_activity) _activity.showError(message || _t(code)); },
 
     render: function(state, container, playerIndex, winner) {
       if (!state || !state.hands || state.hands.length === 0) return;
-      if (_viewState && state.timelineId && state.timelineId !== _viewState.timelineId) resetHandOrder();
+      if (_viewState && state.matchId && state.matchId !== _viewState.matchId) resetHandOrder();
       if (_orderSelfIdx !== playerIndex) { resetHandOrder(); _orderSelfIdx = playerIndex; }
       var ownCount = (state.hands[playerIndex] || []).length;
       if (_lastOrderPhase === 'manipulate' && state.phase !== 'manipulate' && ownCount < _lastHandCount) {
@@ -584,10 +616,13 @@
       _viewState = state;
       _viewSelf = playerIndex;
       trackFeedback(state, playerIndex);
-      _activity.render(state, playerIndex);
+      _activity.setDisabled(!state.activity || state.activity.version !== 1, _t('activity_unavailable'));
+      _activity.update(state.activity, {playerIndex:playerIndex, resetKey:state.matchId,
+        namesVersion:state.hands.map(function(_,index){return window.getPlayerName ? window.getPlayerName(index) : index;}).join('\u0000')});
+      layoutActivity();
       // Chat-only updates append activity while keeping tiles, workspace, input
       // and an in-progress drag intact. Only game changes rebuild game surfaces.
-      var renderKey = JSON.stringify([state.timelineId, playerIndex, state.currentPlayer, state.phase, state.winner,
+      var renderKey = JSON.stringify([state.matchId, playerIndex, state.currentPlayer, state.phase, state.winner,
         state.pool.length, state.table, state.hands[playerIndex], state.hands.map(function(hand) { return hand.length; }),
         state.hasBroken, state.playedThisTurn, state.requireBreak,
         state.hands.map(function(_, index) { return window.getPlayerName ? window.getPlayerName(index) : index; })]);

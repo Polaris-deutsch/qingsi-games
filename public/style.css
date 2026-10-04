@@ -2826,3 +2826,65 @@ body.lobby-page {
     transform: translateY(24px);
   }
 }
+
+/* Shared public ActivityFeed. Passive until an instance is created. */
+.ga-panel { --text: var(--qs-ink, #edf3f2); position: relative; min-width: 0; min-height: 0; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); }
+.ga-head { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px; min-height: 44px; padding: 8px 12px; border: 0; color: var(--accent); background: transparent; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; }
+.ga-head::after { content: '⌃'; }
+.ga-head[aria-expanded=false]::after { content: '⌄'; }
+.ga-unread { margin-left: auto; padding: 1px 6px; border-radius: 10px; background: var(--accent-dim); color: var(--accent); font-size: 11px; }
+.ga-body { position: absolute; z-index: 44; bottom: calc(100% + 6px); left: 0; right: 0; display: flex; flex-direction: column; gap: 6px; height: clamp(180px, 32dvh, 240px); padding: 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); box-shadow: 0 6px 22px rgba(0,0,0,.25); }
+.ga-body[hidden], .ga-reactions[hidden], .ga-unread[hidden], .ga-latest[hidden], .ga-empty[hidden] { display: none; }
+.ga-panel.ga-docked { display: flex; flex-direction: column; }
+.ga-docked .ga-head { cursor: default; flex-shrink: 0; border-bottom: 1px solid var(--border); }
+.ga-docked .ga-head::after { display: none; }
+.ga-docked .ga-body { position: relative; z-index: auto; bottom: auto; flex: 1; min-height: 0; height: auto; border: 0; box-shadow: none; background: transparent; }
+.ga-docked .ga-close { display: none; }
+.ga-tools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; min-height: 22px; flex-shrink: 0; }
+.ga-latest, .ga-close { padding: 3px 6px; border: 0; border-radius: 3px; background: var(--accent-dim); color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; }
+.ga-latest { margin-right: auto; }
+.ga-feed { min-height: 0; flex: 1; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; scrollbar-width: thin; overflow-anchor: none; }
+.ga-empty { color: var(--text-muted); font-size: 12px; padding: 12px 4px; }
+.ga-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; padding: 6px 2px; border-bottom: 1px solid var(--border); color: var(--text-muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.ga-time { flex-shrink: 0; font-size: 10px; opacity: .7; font-variant-numeric: tabular-nums; }
+.ga-title { overflow-wrap: anywhere; }
+.ga-item-muted { padding: 3px 2px; opacity: .7; }
+.ga-item-chat { font-size: 13px; color: var(--text); padding: 8px 2px; }
+.ga-item-chat .ga-title { color: var(--accent); font-size: 11px; font-weight: 600; }
+.ga-chat-text { flex-basis: 100%; white-space: pre-wrap; }
+.ga-item-reaction .ga-title { font-weight: 600; }
+.ga-emoji { font-size: 20px; line-height: 1.2; }
+.ga-mini { display: inline-block; padding: 0 4px; border-radius: 3px; font-size: 11px; line-height: 1.7; font-weight: 600; background: rgba(255,255,255,.06); }
+.ga-compose { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.ga-input { flex: 1; min-width: 0; height: 40px; width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--text); font: inherit; font-size: 16px; }
+.ga-input:focus { outline: 1px solid var(--accent); }
+.ga-emoji-toggle, .ga-send, .ga-reaction-button { border: 1px solid var(--border); border-radius: 3px; background: var(--bg); color: var(--accent); font: inherit; cursor: pointer; }
+.ga-emoji-toggle { width: 38px; height: 40px; font-size: 19px; }
+.ga-send { min-height: 40px; padding: 6px 8px; font-size: 12px; }
+.ga-send:disabled, .ga-reaction-button:disabled { opacity: .45; cursor: default; }
+.ga-status { color: var(--qs-error, #f3aaa1); font-size: 11px; overflow-wrap: anywhere; flex-shrink: 0; }
+.ga-status:empty { display: none; }
+.ga-reactions { position: absolute; bottom: 56px; left: 8px; right: 8px; z-index: 45; display: grid; grid-template-columns: repeat(6, minmax(0,1fr)); gap: 4px; padding: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface); box-shadow: 0 4px 18px rgba(0,0,0,.25); }
+.ga-reaction-button { min-width: 0; min-height: 36px; font-size: 22px; padding: 3px; }
+.ga-keyboard-open .ga-body { position: fixed; left: 12px; right: 12px; bottom: calc(8px + var(--ga-keyboard-bottom)); height: min(240px, 50dvh); z-index: 60; }
+.ga-visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.ga-reaction-new .ga-emoji { animation: ga-reaction-in .18s ease-out; }
+@keyframes ga-reaction-in { from { transform: scale(.88); opacity: .5; } to { transform: scale(1); opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .ga-reaction-new .ga-emoji { animation: none; } }
+
+.connection-failure { padding:16px; margin:12px 0; border:1px solid var(--qs-line, var(--border)); border-radius:12px; background:var(--qs-panel, var(--surface)); color:var(--qs-ink, var(--text)); }
+.connection-failure[hidden] { display:none; }
+.connection-failure p { margin:0 0 12px; }
+.connection-failure .btn { margin-right:8px; }
+
+.solo-mode #roomBadge, .solo-mode #connectionIndicator, .solo-mode #waitingRoom,
+.solo-mode #playerBar, .solo-mode #msPlayers { display:none !important; }
+.solo-mode #gameActions { position:static; padding:18px 0 4px; }
+.solo-mode .game-topbar-main { min-width:0; }
+.solo-mode .g2048-bar { flex-wrap:wrap; }
+#quickSolo[hidden] { display:none; }
+.connection-indicator[data-state="failed"] .connection-dot { background:var(--qs-error); }
+
+.solo-mode .g2048-stat, .solo-mode .su-num, .solo-mode .su-hint {
+  background:var(--qs-panel, #0c1719); color:var(--qs-ink, #eaf4f5); border:1px solid var(--qs-line, #294347);
+}

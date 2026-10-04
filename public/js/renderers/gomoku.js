@@ -6,7 +6,14 @@
   var _listenerAttached = false;
   var _lastState = null;  // remember last board so resize() can redraw
 
+  var orientationTimer=null;
+  function onResize(){resize();}
+  function onOrientation(){clearTimeout(orientationTimer);orientationTimer=setTimeout(resize,100);}
   window.gameRenderers.set('gomoku', {
+    destroy:function(){
+      window.removeEventListener('resize',onResize);window.removeEventListener('orientationchange',onOrientation);
+      clearTimeout(orientationTimer);_listenerAttached=false;canvas=null;ctx=null;_lastState=null;
+    },
     init: function(container) {
       container.innerHTML = '<div class="gomoku-wrap" id="gomokuWrap"><canvas id="gomokuCanvas"></canvas></div>';
       canvas = document.getElementById('gomokuCanvas');
@@ -24,8 +31,8 @@
         window.makeGameMove({ row: row, col: col });
       });
       if (!_listenerAttached) {
-        window.addEventListener('resize', function() { resize(); });
-        window.addEventListener('orientationchange', function() { setTimeout(resize, 100); });
+        window.addEventListener('resize',onResize);
+        window.addEventListener('orientationchange',onOrientation);
         _listenerAttached = true;
       }
     },

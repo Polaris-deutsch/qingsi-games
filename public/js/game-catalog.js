@@ -88,7 +88,7 @@
       duration: '约15分钟',
       category: '牌桌竞技',
       tags: ['组合', '耐玩'],
-      featured: false,
+      featured: true,
       supportsAI: true,
       maxPlayers: 4,
     },
@@ -219,7 +219,7 @@
       duration: '约20分钟',
       category: '牌桌竞技',
       tags: ['筹码', '博弈'],
-      featured: true,
+      featured: false,
       supportsAI: true,
       maxPlayers: 8,
       cover: '/assets/game-covers/texas-table.webp'
@@ -233,7 +233,7 @@
       duration: '约10分钟',
       category: '派对同乐',
       tags: ['家庭局', '轻松'],
-      featured: true,
+      featured: false,
       supportsAI: true,
       maxPlayers: 4,
       cover: '/assets/game-covers/flightchess-race.webp'
@@ -352,7 +352,7 @@
       duration: '约10分钟',
       category: '实时对战',
       tags: ['物理', '爽感'],
-      featured: true,
+      featured: false,
       supportsAI: false,
       maxPlayers: 4,
       cover: '/assets/game-covers/suika-fruit-arena.webp'
@@ -366,7 +366,7 @@
       duration: '约10分钟',
       category: '脑力闯关',
       tags: ['消除', '堆叠'],
-      featured: true,
+      featured: false,
       supportsAI: true,
       maxPlayers: 6,
       cover: '/assets/game-covers/sheeptile-pasture.webp'
@@ -427,6 +427,11 @@
   };
 
 
+  // Browser-local capability belongs to the catalog. Server room requirements
+  // remain authoritative in each game module and arrive with room_joined.
+  const soloCapabilities = {'2048':'local', sudoku:'local', minesweeper:'local', gomoku:'local-ai'};
+  Object.keys(zhCatalog).forEach(function(id) { zhCatalog[id].solo = soloCapabilities[id] || false; });
+
   var catalog = zhCatalog;
 
   Object.keys(catalog).forEach(function(id) {
@@ -435,6 +440,7 @@
     }
   });
 
+  const featuredOrder = ['rummikub', 'drawguess', 'monopoly'];
   const order = [
     'monopoly',
     'flightchess',
@@ -481,7 +487,7 @@
     // Merge language pack over base catalog for localized fields
     var lp = getLangPack();
     if (lp && lp[id]) {
-      return Object.assign({ id }, entry, lp[id]);
+      return Object.assign({ id }, entry, lp[id], {featured:entry.featured === true,solo:entry.solo});
     }
     return Object.assign({ id }, entry);
   }
@@ -494,7 +500,7 @@
       return order.map(withId).filter(Boolean);
     },
     featured: function() {
-      return order.map(withId).filter(function(item) {
+      return featuredOrder.map(withId).filter(function(item) {
         return item && item.featured;
       });
     },

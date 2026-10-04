@@ -10,7 +10,7 @@ function harness(game) {
   const source = fs.readFileSync(path.join(__dirname, '../public/js/room-client.js'), 'utf8');
   const render = source.slice(source.indexOf('  function renderGame() {'), source.indexOf('  function showResult(winner) {'));
   const results = [], rendered = [];
-  const renderer = { render: state => rendered.push(state.timelineSeq) };
+  const renderer = { render: state => rendered.push(state.activity?.seq) };
   const context = vm.createContext({
     game, state: null, players: ['host', 'guest'], playerIndex: 0,
     currentRenderer: renderer, currentRendererKey: game, rummikubResultKey: null,
@@ -23,15 +23,15 @@ function harness(game) {
 
 test('postgame Rummikub chat renders without reopening the result or resetting its timer', () => {
   const h = harness('rummikub');
-  h.update({winner: 0, timelineId: 'match-a', timelineSeq: 7});
-  h.update({winner: 0, timelineId: 'match-a', timelineSeq: 8});
-  h.update({winner: 0, timelineId: 'match-a', timelineSeq: 9});
+  h.update({winner: 0, matchId: 'match-a', activity: {seq: 7}});
+  h.update({winner: 0, matchId: 'match-a', activity: {seq: 8}});
+  h.update({winner: 0, matchId: 'match-a', activity: {seq: 9}});
   assert.deepEqual(h.results, [0]);
   assert.deepEqual(h.rendered, [7, 8, 9], 'chat still reaches the feed');
-  h.update({winner: null, timelineId: 'match-b', timelineSeq: 1});
-  h.update({winner: 0, timelineId: 'match-b', timelineSeq: 5});
+  h.update({winner: null, matchId: 'match-b', activity: {seq: 1}});
+  h.update({winner: 0, matchId: 'match-b', activity: {seq: 5}});
   assert.deepEqual(h.results, [0, 0], 'a new match shows its result even with the same winner');
-  h.update({winner: -1, timelineId: 'match-c', timelineSeq: 3});
+  h.update({winner: -1, matchId: 'match-c', activity: {seq: 3}});
   assert.deepEqual(h.results, [0, 0, -1], 'a restored finished match also shows its result');
 });
 

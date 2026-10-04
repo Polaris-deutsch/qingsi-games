@@ -85,6 +85,11 @@
               <button class="btn btn-outline btn-sm" id="addBotBtn" style="display:none">添加 AI</button>
               <button class="btn btn-accent btn-sm" id="startGameBtn" style="display:none">开始游戏</button>
             </div>
+            <div id="connectionFailure" class="connection-failure" hidden role="alert">
+              <p id="connectionFailureText"></p>
+              <button class="btn btn-outline btn-sm" id="connectionRetry" type="button">重试</button>
+              <a class="btn btn-outline btn-sm" href="/">返回大厅</a>
+            </div>
             <div class="waiting-status" id="waitingStatus" role="status" aria-live="polite">连接中…</div>
           </section>
 
@@ -150,6 +155,8 @@
   <script src="/js/lang/en.js"></script>
   <script src="/js/lang/catalog-zh.js"></script>
   <script src="/js/lang/catalog-en.js"></script>
+  <script src="/js/activity-protocol.js"></script>
+  <script src="/js/ui/activity-feed.js"></script>
   <script src="/js/tutorials.js"></script>
   <script src="/js/renderers/tictactoe.js"></script>
   <script src="/js/renderers/gomoku.js"></script>
@@ -188,6 +195,17 @@
   <script src="/js/renderers/battleship.js"></script>
   <!-- 四川/广东共用 mahjong.js 渲染器，通过 isCantonese() 区分 -->
   <script src="/js/game-catalog.js"></script>
+  <script src="/js/ui/connection-watchdog.js"></script>
+  <script src="/js/core/game2048.js"></script>
+  <script src="/js/core/sudoku-gen.js"></script>
+  <script src="/js/core/2048.js"></script>
+  <script src="/js/core/sudoku.js"></script>
+  <script src="/js/core/minesweeper.js"></script>
+  <script src="/js/core/gomoku.js"></script>
+  <script src="/js/core/gomoku-ai.js"></script>
+  <script src="/js/local/solo-runtime.js"></script>
+  <script src="/js/local/solo-adapters.js"></script>
+  <script src="/js/local/solo-page.js"></script>
   <script src="/js/room-client.js"></script>
 </body>
 </html>

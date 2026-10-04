@@ -270,7 +270,14 @@
     window.makeGameMove({ type: 'hint' });
   };
 
+  function onResize(){if(canvas){computeLayout();drawFrame();}}
+  function onScroll(){drawFrame();}
   window.gameRenderers.set('sudoku', {
+    destroy:function(){
+      clearInterval(_timerRaf);_timerRaf=null;if(_flashRaf)cancelAnimationFrame(_flashRaf);_flashRaf=null;_inited=false;
+      window.removeEventListener('resize',onResize);window.removeEventListener('scroll',onScroll);
+      canvas=null;ctx=null;window._suState=null;window._gameErrorHandler=null;
+    },
     init: function (container) {
       injectStylesOnce('suStyles', STYLES);
       container.innerHTML = ''
@@ -313,8 +320,8 @@
 
       if (!_inited) {
         _inited = true;
-        window.addEventListener('resize', function () { computeLayout(); drawFrame(); });
-        window.addEventListener('scroll', function () { drawFrame(); }, { passive: true });
+        window.addEventListener('resize',onResize);
+        window.addEventListener('scroll',onScroll,{passive:true});
       }
 
       // Tap a blank cell to select it.

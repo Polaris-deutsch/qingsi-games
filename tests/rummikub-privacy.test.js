@@ -29,8 +29,8 @@ function privateView(view, owner, privateIds) {
   }
   assert.ok(view.pool.every(tile => tile === null));
   assert.equal(Object.hasOwn(view,'chatAt'),false,'server cooldowns stay private');
-  for (const event of view.timeline) {
-    if (event.type === 'draw') assert.deepEqual(event.data,{});
+  for (const event of view.activity.items) {
+    if (event.type === 'rummikub.draw') assert.deepEqual(event.data,{});
     assert.equal(Object.hasOwn(event,'workspace'),false);
     assert.equal(Object.hasOwn(event,'savedHand'),false);
   }
@@ -87,34 +87,34 @@ test('Rummikub draws, manipulation snapshots and resumed views keep tile identit
     const guestStart = message(guest, 'game_started');
     const start = await request(host, 'start_game', {}, 'game_started');
     privateView((await guestStart).state, 1, start.state.hands[0].map(tile => tile.id));
-    assert.deepEqual(start.state.timeline.map(e=>e.type),['game_start']);
+    assert.deepEqual(start.state.activity.items.map(e=>e.type),['rummikub.game_start']);
 
     const hostChat=message(host,'game_state');
-    const chatted=await request(guest,'game_move',{action:'chat',text:'  hello   <img src=x>  ',player:0,name:'fake',workspace:start.state.hands[0]},'game_state');
+    const chatted=await request(guest,'game_move',{action:'activity_chat',text:'  hello   <img src=x>  ',player:0,name:'fake',workspace:start.state.hands[0]},'game_state');
     const chattedHost=(await hostChat).state;
-    assert.deepEqual(chatted.state.timeline,chattedHost.timeline);
-    assert.equal(chatted.state.timeline.at(-1).player,1);
-    assert.deepEqual(chatted.state.timeline.at(-1).data,{text:'hello <img src=x>'});
+    assert.deepEqual(chatted.state.activity.items,chattedHost.activity.items);
+    assert.equal(chatted.state.activity.items.at(-1).player,1);
+    assert.deepEqual(chatted.state.activity.items.at(-1).data,{text:'hello <img src=x>'});
     assert.deepEqual(chattedHost.hands,start.state.hands);
     assert.deepEqual(chattedHost.table,start.state.table);
     assert.equal(chattedHost.currentPlayer,start.state.currentPlayer);
     privateView(chatted.state,1,start.state.hands[0].map(t=>t.id));
     const guestReaction=message(guest,'game_state');
-    const reacted=await request(host,'game_move',{action:'reaction',emoji:'👍'},'game_state');
-    assert.deepEqual((await guestReaction).state.timeline,reacted.state.timeline);
+    const reacted=await request(host,'game_move',{action:'activity_reaction',emoji:'👍'},'game_state');
+    assert.deepEqual((await guestReaction).state.activity.items,reacted.state.activity.items);
     for (const [data,code] of [
-      [{action:'chat',text:' '},'rk_chat_empty'],
-      [{action:'chat',text:'x'.repeat(121)},'rk_chat_too_long'],
-      [{action:'reaction',emoji:'<img>'},'rk_reaction_invalid'],
-      [{action:'chat',text:'too soon'},'rk_chat_too_fast'],
+      [{action:'activity_chat',text:' '},'activity_chat_empty'],
+      [{action:'activity_chat',text:'x'.repeat(121)},'activity_chat_too_long'],
+      [{action:'activity_reaction',emoji:'<img>'},'activity_invalid_reaction'],
+      [{action:'activity_chat',text:'too soon'},'activity_chat_fast'],
     ]) assert.equal((await request(guest,'game_move',data,'error')).code,code);
 
     const guestDraw = message(guest, 'game_state');
     const draw = await request(host, 'game_move', { pass: true }, 'game_state');
     const newTiles = draw.state.hands[0].filter(tile => !start.state.hands[0].some(before => before.id === tile.id));
     assert.equal(newTiles.length, 1);
-    assert.equal(draw.state.timeline.filter(e=>e.type==='draw').length,1);
-    assert.deepEqual(draw.state.timeline.find(e=>e.type==='draw').data,{});
+    assert.equal(draw.state.activity.items.filter(e=>e.type==='rummikub.draw').length,1);
+    assert.deepEqual(draw.state.activity.items.find(e=>e.type==='rummikub.draw').data,{});
     privateView((await guestDraw).state, 1, [newTiles[0].id]);
     const hostTurn = message(host, 'game_state');
     await request(guest, 'game_move', { pass: true }, 'game_state'); await hostTurn;
@@ -131,7 +131,7 @@ test('Rummikub draws, manipulation snapshots and resumed views keep tile identit
     privateView(observer, 1, workspace.state.hands[0].map(tile => tile.id));
     await new Promise(resolve=>setTimeout(resolve,810));
     const hostWorkspaceChat=message(host,'game_state');
-    const workspaceChat=await request(guest,'game_move',{action:'chat',text:'thinking',savedHand:workspace.state.savedHand},'game_state');
+    const workspaceChat=await request(guest,'game_move',{action:'activity_chat',text:'thinking',savedHand:workspace.state.savedHand},'game_state');
     const ownerChat=(await hostWorkspaceChat).state;
     assert.equal(ownerChat.phase,'manipulate');assert.deepEqual(ownerChat.workspace,workspace.state.workspace);
     assert.deepEqual(ownerChat.savedHand,workspace.state.savedHand);
@@ -147,7 +147,7 @@ test('Rummikub draws, manipulation snapshots and resumed views keep tile identit
     const submitted = await request(host, 'game_move', { action: 'submit', groups: [edit.state.table[0].concat(extra)] }, 'game_state');
     const publicTable = (await guestSubmit).state;
     assert.ok(publicTable.table[0].some(tile => tile.id === extra.id), 'played tiles become public');
-    assert.deepEqual(publicTable.timeline.at(-1).data,{usedHandTilesCount:1});
+    assert.deepEqual(publicTable.activity.items.at(-1).data,{usedHandTilesCount:1});
     privateView(publicTable, 1, [newTiles[0].id]);
     assert.equal(Object.hasOwn(submitted.state, 'lastDraw'), false, 'no new server feedback fields');
 
@@ -155,12 +155,12 @@ test('Rummikub draws, manipulation snapshots and resumed views keep tile identit
     const view = await request(resumed, 'join_room', { roomId: created.roomId, resumeToken: created.resumeToken }, 'room_joined');
     assert.ok(view.state.hands[0].some(tile => tile.id === newTiles[0].id));
     privateView(view.state, 0, []);
-    assert.deepEqual(view.state.timeline,submitted.state.timeline,'same match timeline restores on reconnect');
+    assert.deepEqual(view.state.activity.items,submitted.state.activity.items,'same match timeline restores on reconnect');
     const nextGuest=message(guest,'game_state');
     const next=await request(resumed,'game_restart',{},'game_state');
-    assert.notEqual(next.state.timelineId,view.state.timelineId);
-    assert.deepEqual(next.state.timeline.map(e=>e.type),['game_start']);
-    assert.deepEqual((await nextGuest).state.timeline,next.state.timeline);
+    assert.notEqual(next.state.matchId,view.state.matchId);
+    assert.deepEqual(next.state.activity.items.map(e=>e.type),['rummikub.game_start']);
+    assert.deepEqual((await nextGuest).state.activity.items,next.state.activity.items);
   } finally {
     for (const client of clients) client.terminate();
     server.kill('SIGTERM');

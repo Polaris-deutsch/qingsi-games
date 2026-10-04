@@ -1,5 +1,6 @@
 // public/js/room-client.js
 (function() {
+  if(window.__SOLO_MODE){window.startSoloGame();return;} // Before DOM setup, room credentials or WebSocket.
   const el = {};
   function cacheElements() {
     ['notifyBar','status','overlay','boardArea','waitingRoom','waitingSlots','waitingStatus','playerBar','resultOverlay','resultText','resultSub','gameStage','gameActions','profileEdit','emojiRow','avatarDrawer','readyBtn','startGameBtn','addBotBtn','gameOptions','seatSwapModal','seatSwapGrid','seatSwapHint','nameInput','avatarEmoji','qrImage','qrRoomCode','roomBadge','primaryRoomCode','inviteLink','connectionIndicator','connectionText'].forEach(function(id) {
@@ -38,7 +39,7 @@
   }
 
   // Games that can be started and played solo (no AI / opponent needed).
-  const SOLO_GAMES = ['2048', 'sudoku', 'minesweeper', 'numberbomb', 'twentyfour', 'suikabattle', 'drawguess'];
+  let minimumPlayers = 2; // Supplied by the authoritative server game module.
 
   let roomOptions = {};
   let prevPlayerCount = 0;
@@ -49,9 +50,28 @@
   function setConnectionState(state) {
     if (!el.connectionIndicator || !el.connectionText) return;
     el.connectionIndicator.dataset.state = state;
-    el.connectionText.textContent = state === 'connected' ? uiText('已连接', 'CONNECTED') :
+    el.connectionText.textContent = state === 'failed' ? uiText('连接失败', 'CONNECTION FAILED') : state === 'connected' ? uiText('已连接', 'CONNECTED') :
       state === 'restoring' ? uiText('正在恢复房间…', 'RESTORING…') : uiText('连接中…', 'CONNECTING…');
   }
+
+  const connectionFailure = document.getElementById('connectionFailure');
+  const connectionFailureText = document.getElementById('connectionFailureText');
+  let reconnectTimer = null;
+  const watchdog = window.ConnectionWatchdog.create({onTimeout:function(){
+    connectionFailed(uiText('房间连接失败，请重试或返回大厅。', 'Room connection failed. Retry or return to the lobby.'));
+  }});
+  function connectionFailed(message) {
+    terminalRoomError = true;watchdog.stop();clearTimeout(reconnectTimer);
+    if(connectionFailure)connectionFailure.hidden=false;
+    if(connectionFailureText)connectionFailureText.textContent=message;
+    el.waitingStatus.textContent=message;setConnectionState('failed');
+    if(ws){try{ws.close();}catch(e){}}
+  }
+  var retryButton=document.getElementById('connectionRetry');
+  if(retryButton){retryButton.textContent=uiText('重试','Retry');retryButton.onclick=function(){
+    terminalRoomError=false;if(connectionFailure)connectionFailure.hidden=true;connect();
+  };}
+  window.addEventListener('pagehide',function(){terminalRoomError=true;watchdog.destroy();clearTimeout(reconnectTimer);});
 
   function notify(msg, kind) {
     const bar = el.notifyBar;
@@ -276,7 +296,9 @@
 
   function connect() {
     if (ws) { try { ws.close(); } catch(e) {} }
-    ws = new WebSocket(getSocketURL());
+    watchdog.start({game:game,roomId:roomId,phase:hasJoinedOnce?'resume':'join'});
+    try {ws = new WebSocket(getSocketURL());}
+    catch(error){connectionFailed(uiText('服务器无法连接，请重试。','Cannot connect to the server. Please retry.'));return;}
     const socket = ws;
     setConnectionState(hasJoinedOnce ? 'restoring' : 'connecting');
     ws.onopen = () => send('join_room', { roomId, resumeToken, lang: window.__ACTIVE_LANG || 'zh' });
@@ -294,6 +316,7 @@
             (msg.state.winner === null || msg.state.winner === undefined)) {
           wasRestart = true;
           if (typeof unregisterAllActions === 'function') unregisterAllActions();
+          if (game === 'rummikub' && currentRenderer && currentRenderer.destroy) currentRenderer.destroy();
           currentRenderer = null;
           currentRendererKey = null;
           const container = el.boardArea;
@@ -362,6 +385,7 @@
         window.location.replace('/?kicked=1');
       },
       room_update(msg) {
+        if(hasJoinedOnce)watchdog.stop();
         players = msg.players || players;
         roomPhase = msg.phase || roomPhase;
         if (msg.options) roomOptions = msg.options;
@@ -379,8 +403,9 @@
         handlePlayerChange(msg, 'player_left');
       },
       error(msg) {
-        if (game === 'rummikub' && currentRenderer && currentRenderer.activityError &&
-            /^rk_(chat_|reaction_)/.test(msg.code || '')) {
+        if((!hasJoinedOnce && msg.code !== 'ROOM_NOT_FOUND') || msg.code === 'GAME_VIEW_FAILED' || msg.code === 'GAME_MODULE_ERROR'){connectionFailed(msg.message || uiText('房间连接失败','Room connection failed'));return;}
+        if (currentRenderer && currentRenderer.activityError &&
+            /^activity_/.test(msg.code || '')) {
           currentRenderer.activityError(msg.code, msg.message);
           return;
         }
@@ -414,6 +439,8 @@
     };
 
     function handleRoomJoined(msg) {
+      watchdog.stop();terminalRoomError=false;if(connectionFailure)connectionFailure.hidden=true;
+      minimumPlayers=Number.isInteger(msg.minPlayers)?msg.minPlayers:2;
       resetRummikubFeedback();
       var wasRestoring = hasJoinedOnce;
       state = msg.state || state;
@@ -486,7 +513,7 @@
           clearTimeout(bar._timer);
           bar._timer = 0;
         }
-        setTimeout(connect, 1500);
+        reconnectTimer=setTimeout(connect, 1500);
       }
     };
     ws.onerror = () => { if (ws === socket) setConnectionState(hasJoinedOnce ? 'restoring' : 'connecting'); };
@@ -524,6 +551,9 @@
     if (game === 'rummikub') {
       document.body.classList.remove('rk-playing');
       resetRummikubFeedback();
+      if (currentRenderer && currentRenderer.destroy) currentRenderer.destroy();
+      currentRenderer = null;
+      currentRendererKey = null;
     }
     setImmersiveLandscape(false);
     el.waitingRoom.style.display = '';
@@ -1090,7 +1120,7 @@
       if (isHost) {
         const allReady = players && players.filter(p => !p.isBot).every(p => p.ready);
         const totalPlayers = players ? players.length : 0;
-        const minPlayers = SOLO_GAMES.indexOf(game) >= 0 ? 1 : 2;
+        const minPlayers = minimumPlayers;
         const canStart = allReady && totalPlayers >= minPlayers;
         startBtn.disabled = !canStart;
         startBtn.classList.toggle('disabled', !canStart);
@@ -1117,7 +1147,7 @@
     if (waitingStatus) {
       const allReady = players && players.filter(p => !p.isBot).every(p => p.ready);
       const totalPlayers = players ? players.length : 0;
-      const minNeeded = SOLO_GAMES.indexOf(game) >= 0 ? 1 : 2;
+      const minNeeded = minimumPlayers;
       if (allReady && totalPlayers >= minNeeded) {
         waitingStatus.textContent = isHost ? _t('all_ready_start') : _t('waiting_host_start');
       } else {
@@ -1230,6 +1260,7 @@
     var key = rendererKeyFor(game);
     if (!currentRenderer || currentRendererKey !== key) {
       if (typeof unregisterAllActions === 'function') unregisterAllActions();
+      if (currentRendererKey === 'rummikub' && currentRenderer && currentRenderer.destroy) currentRenderer.destroy();
       currentRenderer = window.gameRenderers.get(key);
       currentRendererKey = key;
       el.boardArea.innerHTML = '';
@@ -1240,7 +1271,7 @@
     if (game === 'rummikub') {
       // Postgame chat still broadcasts state. Show each result once so these
       // social updates do not reopen the overlay or reset its close timer.
-      var resultKey = state.winner == null ? null : state.timelineId + ':' + state.winner;
+      var resultKey = state.winner == null ? null : state.matchId + ':' + state.winner;
       if (resultKey !== null && resultKey !== rummikubResultKey) showResult(state.winner);
       rummikubResultKey = resultKey;
     } else if (state.winner !== null && state.winner !== undefined) showResult(state.winner);

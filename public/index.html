@@ -46,13 +46,19 @@
           <p class="join-help">有房间号，直接加入。想开一局，先在下方选游戏。</p>
         </section>
         <button id="quickCreate" class="quick-create-btn">创建房间</button>
+        <a id="quickSolo" class="btn btn-outline btn-sm" hidden href="/game.html?mode=solo&amp;game=2048">单人游戏</a>
       </div>
     </section>
 
+    <div id="lobbyConnectionFailure" class="connection-failure" hidden role="alert">
+      <p id="lobbyConnectionFailureText"></p>
+      <button class="btn btn-outline btn-sm" id="lobbyConnectionRetry" type="button">重试</button>
+      <a class="btn btn-outline btn-sm" href="/">返回大厅</a>
+    </div>
     <p class="wifi-note" id="wifiNote">确保所有设备连接到同一个 Wi-Fi 或手机热点。</p>
     <div class="mobile-only-banner" id="mobileOnlyBanner" style="display:none">
       <strong id="mobileOnlyTitle">离线单机模式</strong>
-      <span id="mobileOnlySub">流量下无法与他人联机，但可加 AI 玩。</span>
+      <span id="mobileOnlySub">可直接开始本地单人游戏，无需连接房间。</span>
     </div>
     <section class="lobby-discovery" id="featured">
       <div class="discovery-header">
@@ -94,6 +100,7 @@
 <script src="/js/lang/catalog-zh.js"></script>
 <script src="/js/lang/catalog-en.js"></script>
 <script src="/js/game-catalog.js"></script>
+<script src="/js/ui/connection-watchdog.js"></script>
 <script>
 let selectedGame = 'monopoly';
 let activeCategory = 'ALL';
@@ -113,15 +120,16 @@ function categoryCode(game) { return categoryMap[game.category] || 'PARTY'; }
 function gameMeta(game) {
   return '<span>' + escapeHtml(game.players) + '</span>' +
     (game.supportsAI ? '<span>BOT</span>' : '') +
+    (game.solo ? '<span>' + uiText('单人','SOLO') + '</span>' : '') +
     (realtimeGames.has(game.id) ? '<span>REALTIME</span>' : '');
 }
 
 const __isMobileData = (new URLSearchParams(location.search).get('wifi') === '0');
 const __allGames = window.gameCatalog.list();
 const __allFeatured = window.gameCatalog.featured();
-function playable(g) { return !__isMobileData || g.supportsAI !== false; }
+function playable(g) { return !__isMobileData || g.solo || g.supportsAI !== false; }
 const catalog = __allGames.filter(playable);
-const featuredGames = __allFeatured.filter(playable).slice(0, 3);
+const featuredGames = __allFeatured;
 
 function escapeHtml(text) {
   return String(text || '')
@@ -184,6 +192,9 @@ function buildBrowseCard(game) {
 }
 
 function updateQuickCreate() {
+  const solo=document.getElementById('quickSolo'),info=getGameInfo(selectedGame);
+  solo.hidden=!info.solo;solo.textContent=uiText('单人游戏 · ','Solo game · ')+info.name;
+  solo.href='/game.html?mode=solo&game='+encodeURIComponent(selectedGame);
   if (!lobbyBusy) document.getElementById('quickCreate').textContent = uiText('创建房间 · ', 'Create room · ') + getGameInfo(selectedGame).name;
 }
 
@@ -258,6 +269,18 @@ function setLobbyBusy(kind, busy) {
   join.textContent = busy && kind === 'join' ? uiText('加入中…', 'JOINING…') : uiText('加入', 'Join');
 }
 
+function watchLobbyConnection(ws, kind, retry, context) {
+  const panel=document.getElementById('lobbyConnectionFailure');panel.hidden=true;let failed=false;
+  const watchdog=ConnectionWatchdog.create({onTimeout:function(){
+    fail(uiText('服务器连接或房间响应超时，请重试。','Server connection or room response timed out. Please retry.'));ws.close();
+  }});
+  function fail(message){if(failed)return;failed=true;watchdog.stop();setLobbyBusy(kind,false);panel.hidden=false;
+    document.getElementById('lobbyConnectionFailureText').textContent=message;
+    const button=document.getElementById('lobbyConnectionRetry');button.textContent=uiText('重试','Retry');button.onclick=retry;
+  }
+  watchdog.start(context);return {stop:function(){watchdog.destroy();},fail:fail};
+}
+
 function createRoom() {
   if (lobbyBusy) return;
   if (__isMobileData) {
@@ -265,15 +288,17 @@ function createRoom() {
     return;
   }
   setLobbyBusy('create', true);
+  const requestedGame=selectedGame;
   const ws = new WebSocket(getSocketURL());
   let completed = false;
+  const connection=watchLobbyConnection(ws,'create',createRoom,{game:requestedGame,roomId:null,phase:'create'});
   ws.onopen = function() {
-    ws.send(JSON.stringify({ type: 'create_room', data: { game: selectedGame, lang: window.__ACTIVE_LANG || 'zh' } }));
+    ws.send(JSON.stringify({ type: 'create_room', data: { game: requestedGame, lang: window.__ACTIVE_LANG || 'zh' } }));
   };
   ws.onmessage = function(e) {
     const msg = JSON.parse(e.data);
     if (msg.type === 'room_created') {
-      completed = true;
+      completed = true;connection.stop();
       sessionStorage.setItem('roomId', msg.roomId);
       sessionStorage.setItem('playerIndex', msg.playerIndex);
       sessionStorage.setItem('game', msg.game);
@@ -282,15 +307,15 @@ function createRoom() {
       location.replace('/game.html');
     } else if (msg.type === 'error') {
       toast((typeof _t === 'function' ? _t('error_prefix') : '\u9519\u8bef\uff1a') + msg.message, 'error');
-      setLobbyBusy('create', false);
+      connection.fail(msg.message);
       ws.close();
     }
   };
   ws.onerror = function() {
     toast(uiText('连接失败，请稍后重试。', 'Connection failed. Please try again.'), 'error');
-    setLobbyBusy('create', false);
+    connection.fail(uiText('服务器无法连接，请重试。','Cannot connect to the server. Please retry.'));ws.close();
   };
-  ws.onclose = function() { if (!completed) setLobbyBusy('create', false); };
+  ws.onclose = function() { if(!completed)connection.fail(uiText('房间创建连接已断开，请重试。','Room creation connection closed. Please retry.'));connection.stop(); };
 }
 
 document.getElementById('quickCreate').addEventListener('click', function() {
@@ -307,13 +332,14 @@ document.getElementById('joinBtn').addEventListener('click', function() {
   setLobbyBusy('join', true);
   const ws = new WebSocket(getSocketURL());
   let completed = false;
+  const connection=watchLobbyConnection(ws,'join',function(){document.getElementById('joinBtn').click();},{game:null,roomId:code,phase:'join'});
   ws.onopen = function() {
     ws.send(JSON.stringify({ type: 'join_room', data: { roomId: code, lang: window.__ACTIVE_LANG || 'zh' } }));
   };
   ws.onmessage = function(e) {
     const msg = JSON.parse(e.data);
     if (msg.type === 'room_joined') {
-      completed = true;
+      completed = true;connection.stop();
       sessionStorage.setItem('roomId', msg.roomId);
       sessionStorage.setItem('playerIndex', msg.playerIndex);
       sessionStorage.setItem('game', msg.game);
@@ -322,7 +348,7 @@ document.getElementById('joinBtn').addEventListener('click', function() {
       location.replace('/game.html');
     } else if (msg.type === 'error') {
       toast((typeof _t === 'function' ? _t('error_prefix') : '\u9519\u8bef\uff1a') + msg.message, 'error');
-      setLobbyBusy('join', false);
+      connection.fail(msg.message);
       ws.close();
       if (msg.code === 'ROOM_NOT_FOUND') {
         sessionStorage.removeItem('roomId');
@@ -334,9 +360,9 @@ document.getElementById('joinBtn').addEventListener('click', function() {
   };
   ws.onerror = function() {
     toast(uiText('连接失败，请稍后重试。', 'Connection failed. Please try again.'), 'error');
-    setLobbyBusy('join', false);
+    connection.fail(uiText('服务器无法连接，请重试。','Cannot connect to the server. Please retry.'));ws.close();
   };
-  ws.onclose = function() { if (!completed) setLobbyBusy('join', false); };
+  ws.onclose = function() { if(!completed)connection.fail(uiText('房间加入连接已断开，请重试。','Room join connection closed. Please retry.'));connection.stop(); };
 });
 
 document.getElementById('roomCodeInput').addEventListener('keydown', function(e) {

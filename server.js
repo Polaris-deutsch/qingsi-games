@@ -44,6 +44,7 @@ let activePort = PORT;
 
 // Load game registry
 const gameRegistry = Object.create(null);
+const gameLoadErrors = new Set();
 const gamesDir = path.join(__dirname, 'games');
 // Temporary startup isolation for Android crash triage.
 // If this server boots with registries disabled, a specific module load is the culprit.
@@ -51,12 +52,18 @@ if (!process.env.ANDROID_SKIP_REGISTRY_LOAD) {
   fs.readdirSync(gamesDir).forEach(file => {
     if (file.endsWith('.js')) {
       logStep('[android-node] loading game module: ' + file);
+      try {
       const mod = require(path.join(gamesDir, file));
       // Skip data/support files (e.g. drawguess-words.js word lists) that don't
       // implement the game-module interface. Registering them under `undefined`
       // made create_room crash when a stale/undefined game code reached the player.
       if (typeof mod.createState !== 'function' || typeof mod.handleMove !== 'function') return;
+      if (typeof mod.name !== 'string' || !mod.name || gameRegistry[mod.name]) throw new Error('Invalid or duplicate game ID');
       gameRegistry[mod.name] = mod;
+      } catch (error) {
+        gameLoadErrors.add(file.slice(0, -3));
+        console.error('[GameNest] Game module load failed: ' + file, error.stack || error);
+      }
     }
   });
 }
@@ -349,9 +356,11 @@ function createRoom(ws, gameType, lang) {
   let initialState;
   try {
     initialState = gameMod.createState();
+    if (!initialState || typeof initialState !== 'object' || Array.isArray(initialState)) throw new Error('createState must return an object');
+    JSON.stringify(initialState);
   } catch (e) {
     // A single bad/misconfigured state factory must not crash the whole server.
-    console.error('createState failed for game "' + gameType + '":', e && e.message);
+    console.error('[GameNest] createState failed for game "' + gameType + '":', e.stack || e);
     return null;
   }
   let roomId;
@@ -475,31 +484,37 @@ function broadcastGameView(room, msgType) {
   const t = msgType || 'game_state';
   const gameMod = gameRegistry[room.game];
   const players = roomPlayersList(room);
-  if (SERVER_FILTERED_GAMES.has(room.game)) {
+  if (SERVER_FILTERED_GAMES.has(room.game) || gameMod.playerView || gameMod.playerBoardView) {
     for (const [client, info] of room.players) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: t, state: gameViewForPlayer(room, info.index), players }));
-      }
-    }
-  } else if (room.game === 'minesweeper' && gameMod.playerBoardView) {
-    for (const [client, info] of room.players) {
-      if (client.readyState === 1) {
-        const viewState = Object.assign({}, room.state, { board: gameMod.playerBoardView(room.state, info.index) });
-        client.send(JSON.stringify({ type: t, state: viewState, players }));
-      }
-    }
-  } else if (gameMod.playerView) {
-    for (const [client, info] of room.players) {
-      if (client.readyState === 1) {
-        client.send(JSON.stringify({ type: t, state: gameMod.playerView(room.state, info.index), players }));
+      if (client.readyState !== 1) continue;
+      try {
+        client.send(JSON.stringify({type:t, state:gameViewForPlayer(room, info.index), players}));
+      } catch (error) {
+        client.send(JSON.stringify({type:'error', code:'GAME_VIEW_FAILED', message:serverT(room,'game_module_error')}));
       }
     }
   } else {
-    broadcastRoom(room, { type: t, state: room.state, players });
+    broadcastRoom(room, { type:t, state:room.state, players });
   }
 }
 
 function gameViewForPlayer(room, playerIndex) {
+  // Waiting rooms have no initialized playing board. Do not invoke a gameplay
+  // projection or send raw/private factory state before start_game/initGame.
+  if (room.phase !== 'playing' || !room.state) return null;
+  try {
+    const view = playingGameViewForPlayer(room, playerIndex);
+    if (!view || typeof view !== 'object') throw new Error('playerView must return an object');
+    JSON.stringify(view);
+    return view;
+  } catch (error) {
+    console.error('[GameNest] playerView failed: game=' + room.game + ' player=' + playerIndex + ' phase=' + room.phase, error.stack || error);
+    error.code = 'GAME_VIEW_FAILED';
+    throw error;
+  }
+}
+
+function playingGameViewForPlayer(room, playerIndex) {
   if (!room.state) return null;
   const gameMod = gameRegistry[room.game];
   if (room.game === 'uno') {
@@ -543,8 +558,7 @@ function gameViewForPlayer(room, playerIndex) {
       }
     } else if (room.game === 'rummikub') {
       view.pool = hidden(state.pool);
-      view.timeline = require('./public/js/rummikub-activity').publicTimeline(state.timeline);
-      delete view.chatAt;
+      view.activity = gameMod.getActivityView(state);
       if (state.currentPlayer !== playerIndex) {
         view.workspace = [];
         view.savedHand = null;
@@ -834,7 +848,7 @@ function scheduleDrawguessTimer(room) {
     return;
   }
   if (!seconds || seconds <= 0) { state.stepDeadline = 0; return; } // 不限时
-  const ms = seconds * 1000 + 2000; // 2s 网络缓冲，前端先到先得
+  const ms = seconds * 1000 + (state.phase === 'round_result' ? 0 : 2000); // Result lasts 5s; input phases retain their network grace.
   state.stepDeadline = Date.now() + ms;
   room._dgTimer = setTimeout(() => {
     if (!rooms.has(room._roomId)) return;
@@ -992,7 +1006,7 @@ function scheduleBattleshipPlacements(room) {
       break;
     }
   }
-  if (!nextBot) { scheduleBotMove(room); return; }
+  if (!nextBot) return; // Still placing: wait for human moves; recursing into the dispatcher loops forever.
 
   const delay = 250 + Math.random() * 500;
   clearTimeout(room._botTimer);
@@ -1038,7 +1052,7 @@ wss.on('connection', (ws) => {
     if (type === 'create_room') {
       const { game, lang } = data || {};
       if (!gameRegistry[game]) {
-        ws.send(JSON.stringify({ type: 'error', message: serverT(currentRoom, 'invalid_game_type') }));
+        ws.send(JSON.stringify({ type: 'error', code:gameLoadErrors.has(game) ? 'GAME_MODULE_ERROR' : 'INVALID_GAME', message: serverT(currentRoom, gameLoadErrors.has(game) ? 'game_module_error' : 'invalid_game_type') }));
         return;
       }
       if (Date.now() - lastCreateAt < 3000) {
@@ -1056,7 +1070,7 @@ wss.on('connection', (ws) => {
       lastCreateAt = Date.now();
       const result = createRoom(ws, game, lang || 'zh');
       if (!result) {
-        ws.send(JSON.stringify({ type: 'error', message: serverT(currentRoom, 'create_room_failed') }));
+        ws.send(JSON.stringify({ type: 'error', code:'CREATE_ROOM_FAILED', message: serverT(currentRoom, 'create_room_failed') }));
         return;
       }
       currentRoomId = result.roomId;
@@ -1066,6 +1080,7 @@ wss.on('connection', (ws) => {
         roomId: result.roomId,
         game,
         maxPlayers: currentRoom.maxPlayers,
+        minPlayers: gameRegistry[game].minPlayers || 2,
         playerIndex: 0,
         players: roomPlayersList(currentRoom),
         phase: currentRoom.phase,
@@ -1211,7 +1226,7 @@ wss.on('connection', (ws) => {
         if (room.hostWS === oldWs) room.hostWS = ws;
         currentRoomId = roomId;
         currentRoom = room;
-        ws.send(JSON.stringify({ type: 'room_joined', roomId, game: room.game, maxPlayers: room.maxPlayers,
+        ws.send(JSON.stringify({ type: 'room_joined', roomId, game: room.game, maxPlayers: room.maxPlayers, minPlayers:gameRegistry[room.game].minPlayers || 2,
           playerIndex: info.index, players: roomPlayersList(room), state: gameViewForPlayer(room, info.index), phase: room.phase,
           options: room.options, resumeToken: info.resumeToken }));
         sendToRoom(room, {
@@ -1231,7 +1246,7 @@ wss.on('connection', (ws) => {
           type: 'room_joined',
           roomId,
           game: room.game,
-          maxPlayers: room.maxPlayers,
+          maxPlayers: room.maxPlayers, minPlayers:gameRegistry[room.game].minPlayers || 2,
           playerIndex: existing[1].index,
           players: roomPlayersList(room),
           state: gameViewForPlayer(room, existing[1].index),
@@ -1284,7 +1299,7 @@ wss.on('connection', (ws) => {
         type: 'room_joined',
         roomId,
         game: room.game,
-        maxPlayers: room.maxPlayers,
+        maxPlayers: room.maxPlayers, minPlayers:gameRegistry[room.game].minPlayers || 2,
         playerIndex: idx,
         players: roomPlayersList(room),
         state: gameViewForPlayer(room, idx),
@@ -1511,17 +1526,18 @@ wss.on('connection', (ws) => {
           hadMatch: challenge.handSnapshot.some(card => card.color === challenge.priorColor),
         };
       }
-      const rummikubSocial = currentRoom.game === 'rummikub' && (data.action === 'chat' || data.action === 'reaction');
-      const err = rummikubSocial && currentRoom.phase !== 'playing'
-        ? 'rk_chat_not_started' : gameMod.handleMove(data, currentRoom.state, playerInfo.index);
+      const phaseBeforeMove = currentRoom.state && currentRoom.state.phase;
+      const socialAction = gameMod.supportsActivity === true && require('./games/lib/activity').isSocialAction(data);
+      const err = socialAction && currentRoom.phase !== 'playing'
+        ? 'activity_unavailable' : gameMod.handleMove(data, currentRoom.state, playerInfo.index);
       if (err) {
         ws.send(JSON.stringify({ type: 'error', message: serverT(currentRoom, err), code: err }));
         return;
       }
       if (currentRoom.game === 'uno' && data.challengeResponse) currentRoom._unoLastChallenge = unoChallengeResult;
 
-      // Rummikub chat must not advance disconnected turns or restart bot timers.
-      if (rummikubSocial) {
+      // Opted-in public social actions must not advance turns or restart bot timers.
+      if (socialAction) {
         broadcastGameView(currentRoom, 'game_state');
         return;
       }
@@ -1535,7 +1551,8 @@ wss.on('connection', (ws) => {
 
       // drawguess: reset the step timer after every successful move (updates stepDeadline before broadcast)
       const isStageLiveAction = currentRoom.game === 'drawguess' && (data.type === 'stage_stroke' || data.type === 'stage_guess');
-      if (currentRoom.game === 'drawguess' && !isStageLiveAction) scheduleDrawguessTimer(currentRoom);
+      if (currentRoom.game === 'drawguess' &&
+          (!isStageLiveAction || currentRoom.state.phase !== phaseBeforeMove)) scheduleDrawguessTimer(currentRoom);
 
       // Mahjong: settle the round before broadcasting the 'over' game_state so the
       // settlement panel draws with the already-updated cumulativeScore (no stale flash).
@@ -1701,6 +1718,7 @@ wss.on('connection', (ws) => {
     }
     } catch (err) {
       // Client input must never turn a game-handler exception into a process crash.
+      if (err.code === 'GAME_VIEW_FAILED') ws.send(JSON.stringify({type:'error',code:'GAME_VIEW_FAILED',message:serverT(currentRoom,'game_module_error')}));
       ws.close(1008, 'Invalid message');
     }
   });

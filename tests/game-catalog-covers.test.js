@@ -39,3 +39,13 @@ test('every configured cover file exists on disk', () => {
 
   assert.deepEqual(missingFiles, []);
 });
+
+ test('featured games have exact membership and order in both languages', () => {
+  for (const lang of ['zh', 'en']) {
+    const sandbox = {window:{__ACTIVE_LANG:lang, __LANG:{[lang]:{catalog:{texas:{featured:true}}}}}};
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../public/js/game-catalog.js'),'utf8'),sandbox);
+    const catalog=sandbox.window.gameCatalog;
+    assert.deepEqual(Array.from(catalog.featured(),game=>game.id),['rummikub','drawguess','monopoly']);
+    assert.deepEqual(Array.from(catalog.list().filter(game=>game.featured),game=>game.id).sort(),['drawguess','monopoly','rummikub']);
+  }
+});

@@ -242,7 +242,15 @@
     else window.makeGameMove({ dir: dy > 0 ? 'down' : 'up' });
   }
 
+  function onResize(){if(canvas){computeLayout();drawFrame();}}
+  function onScroll(){drawFrame();}
   window.gameRenderers.set('2048', {
+    destroy:function(){
+      stopAnimLoop();clearInterval(_timerRaf);_timerRaf=null;_inited=false;
+      window.removeEventListener('resize',onResize);window.removeEventListener('scroll',onScroll);window.removeEventListener('keydown',onKeyDown);
+      document.removeEventListener('touchstart',onTouchStart);document.removeEventListener('touchend',onTouchEnd);
+      canvas=null;ctx=null;window._g2048State=null;window._g2048Prev=null;
+    },
     init: function (container) {
       injectStylesOnce('g2048Styles', STYLES);
       container.innerHTML = ''
@@ -262,6 +270,7 @@
       document.getElementById('g2048BoardWrap').appendChild(canvas);
       ctx = canvas.getContext('2d', { preserveDrawingBuffer: true });
 
+      window._g2048Prev=null;stopAnimLoop();
       _timerEnd = 0;
       if (_timerRaf) { clearInterval(_timerRaf); _timerRaf = null; }
 
@@ -269,8 +278,8 @@
 
       if (!_inited) {
         _inited = true;
-        window.addEventListener('resize', function () { computeLayout(); drawFrame(); });
-        window.addEventListener('scroll', function () { drawFrame(); }, { passive: true });
+        window.addEventListener('resize',onResize);
+        window.addEventListener('scroll',onScroll,{passive:true});
         window.addEventListener('keydown', onKeyDown);
         document.addEventListener('touchstart', onTouchStart, { passive: true });
         document.addEventListener('touchend', onTouchEnd, { passive: true });

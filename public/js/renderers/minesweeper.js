@@ -142,6 +142,7 @@
   }
 
   window.gameRenderers.set('minesweeper', {
+    destroy:function(){clearTimeout(_longPressTimer);_longPressTimer=null;},
     init: function(container) {
       injectStylesOnce('msStyles', STYLES);
       container.innerHTML = '' +

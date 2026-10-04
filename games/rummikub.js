@@ -3,10 +3,12 @@
 
 exports.name = 'rummikub';
 exports.maxPlayers = 4;
+exports.supportsActivity = true;
 const { pick } = require('./lib/i18n');
 const { normalizeTableSet } = require('../public/js/rummikub-order');
 const { randomUUID } = require('node:crypto');
-const Activity = require('../public/js/rummikub-activity');
+const Activity = require('./lib/activity');
+const PublicActivity = require('../public/js/rummikub-activity');
 
 const COLORS = ['black', 'blue', 'red', 'orange'];
 const COLOR_NAMES = { black: '黑', blue: '蓝', red: '红', orange: '橙' };
@@ -58,46 +60,18 @@ exports.createState = () => ({
   savedHand: null,    // snapshot for cancel
   savedHandIds: null, // IDs of original hand tiles to verify at least one used
   passesSinceLastPlay: 0, // consecutive passes while pool empty — draw detection
-  timeline: [],
-  timelineSeq: 0,
-  timelineId: null,   // unique match identity; sequence restarts on a new match
-  chatAt: {},        // server-only shared chat/reaction cooldown by authenticated seat
+  activity: {version:1, seq:0, items:[]},
+  matchId: null,     // distinguishes new matches even when their activity sequences coincide
 });
 
 function recordEvent(state, type, player = null, data = {}) {
-  if (!Array.isArray(state.timeline)) state.timeline = [];
-  const event = Activity.publicEvent({seq:(state.timelineSeq || 0) + 1, type, player, time:Date.now(), data});
-  if (!event) return;
-  state.timelineSeq = event.seq;
-  state.timeline.push(event);
-  if (state.timeline.length > Activity.TIMELINE_MAX) state.timeline.splice(0, state.timeline.length - Activity.TIMELINE_MAX);
+  Activity.push(state, {type:'rummikub.' + type, player, data}, {projectData:PublicActivity.projectData});
 }
-
 function finishEvent(state) { recordEvent(state, 'game_end', null, {winner:state.winner}); }
 exports.recordTurn = function(state, player) {
-  if (state.timelineId && state.hands.length && state.winner === null) recordEvent(state, 'turn', player);
+  if (state.matchId && state.hands.length && state.winner === null) recordEvent(state, 'turn', player);
 };
-
-function socialMove(data, state, playerIndex) {
-  if (!Number.isInteger(playerIndex) || playerIndex < 0 || playerIndex >= state.hands.length) return 'rk_chat_bad_player';
-  if (!state.timelineId) return 'rk_chat_not_started';
-  let content;
-  if (data.action === 'chat') {
-    if (typeof data.text !== 'string') return 'rk_chat_empty';
-    content = Activity.normalizeChat(data.text);
-    if (!content) return 'rk_chat_empty';
-    if (Array.from(content).length > Activity.CHAT_MAX) return 'rk_chat_too_long';
-  } else {
-    if (!Activity.REACTIONS.includes(data.emoji)) return 'rk_reaction_invalid';
-    content = data.emoji;
-  }
-  const now = Date.now();
-  if (!state.chatAt) state.chatAt = {};
-  if (Object.hasOwn(state.chatAt, playerIndex) && now - state.chatAt[playerIndex] < Activity.CHAT_GAP) return 'rk_chat_too_fast';
-  state.chatAt[playerIndex] = now;
-  recordEvent(state, data.action, playerIndex, data.action === 'chat' ? {text:content} : {emoji:content});
-  return null;
-}
+exports.getActivityView = state => Activity.publicView(state, {projectData:PublicActivity.projectData});
 
 function initGame(state, playerCount) {
   const tiles = createTiles();
@@ -120,10 +94,8 @@ function initGame(state, playerCount) {
   state.savedHand = null;
   state.savedHandIds = null;
   state.passesSinceLastPlay = 0;
-  state.timeline = [];
-  state.timelineSeq = 0;
-  state.timelineId = randomUUID();
-  state.chatAt = {};
+  Activity.reset(state, {projectData:PublicActivity.projectData});
+  state.matchId = randomUUID();
   recordEvent(state, 'game_start');
 }
 exports.initGame = initGame;
@@ -211,7 +183,10 @@ function canAddToSet(tile, set) {
 exports.handleMove = (data, state, playerIndex) => {
   // Social messages are accepted independently of game phase/turn ownership.
   // The room server authenticates the sender and excludes lobby messages.
-  if (data && (data.action === 'chat' || data.action === 'reaction')) return socialMove(data, state, playerIndex);
+  const social = Activity.handleSocialAction(data, state, playerIndex, {
+    enabled:state.hands.length > 0, playerCount:state.hands.length,
+  });
+  if (social.handled) return social.error;
   if (state.winner !== null) return 'g_game_over';
 
   if (state.hands.length === 0) {
