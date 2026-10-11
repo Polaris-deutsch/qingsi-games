@@ -10,6 +10,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { once } = require('node:events');
 const test = require('node:test');
 const WebSocket = require('ws');
+const { getServicePort } = require('../scripts/service-port');
 
 const project = path.resolve(__dirname, '..');
 const script = path.join(project, 'scripts/qingsi-games-service.sh');
@@ -24,9 +25,9 @@ function birth(pid) {
   } catch { return null; }
 }
 
-function readHealth() {
+function readHealth(port) {
   return new Promise((resolve, reject) => {
-    const request = http.get('http://127.0.0.1:3000/api/health', (response) => {
+    const request = http.get(`http://127.0.0.1:${port}/api/health`, (response) => {
       let body = '';
       response.on('data', (chunk) => { body += chunk; });
       response.on('end', () => {
@@ -39,25 +40,36 @@ function readHealth() {
   });
 }
 
-async function waitForHealth() {
+async function waitForHealth(port) {
   const deadline = Date.now() + 3000;
   while (Date.now() < deadline) {
-    try { if ((await readHealth()).service === 'qingsi-games') return; } catch { /* booting */ }
+    try { if ((await readHealth(port)).service === 'qingsi-games') return; } catch { /* booting */ }
     await sleep(100);
   }
   throw new Error('test server did not become healthy');
 }
 
-test('service lifecycle manages only verified PIDs and releases port 3000', async () => {
-  // Never exercise start/stop against a service that was already using this port.
+test('service port overrides require explicit test mode and never select port 3000', () => {
+  assert.equal(getServicePort({}), 3000);
+  assert.equal(getServicePort({ PORT: '4000' }), 3000);
+  assert.equal(getServicePort({ NODE_ENV: 'test' }), 3000);
+  assert.equal(getServicePort({ NODE_ENV: 'production', QINGSI_GAMES_TEST_PORT: '4000' }), 3000);
+  assert.equal(getServicePort({ NODE_ENV: 'test', QINGSI_GAMES_TEST_PORT: '4000' }), 4000);
+  for (const value of ['', '0', '3000', '65536', 'abc', '4000junk', '1.5']) {
+    assert.throws(() => getServicePort({ NODE_ENV: 'test', QINGSI_GAMES_TEST_PORT: value }), /isolated TCP port/);
+  }
+});
+
+test('service lifecycle manages only verified PIDs and releases an isolated test port', async () => {
   const listener = net.createServer();
-  listener.listen({ host: '0.0.0.0', port: 3000, exclusive: true });
+  listener.listen({ host: '0.0.0.0', port: 0, exclusive: true });
   await once(listener, 'listening');
+  const port = listener.address().port;
   await new Promise((resolve) => listener.close(resolve));
 
   const state = fs.mkdtempSync(path.join(os.tmpdir(), 'qingsi-service-test-'));
   console.log(`Test runtime directory: ${state}`);
-  const env = { ...process.env, QINGSI_GAMES_STATE_DIR: state };
+  const env = { ...process.env, NODE_ENV: 'test', QINGSI_GAMES_TEST_PORT: String(port), QINGSI_GAMES_STATE_DIR: state };
   delete env.PUBLIC_BASE_URL;
   delete env.ANDROID_SKIP_REGISTRY_LOAD;
   const pidFile = path.join(state, 'qingsi-games.pid');
@@ -96,8 +108,8 @@ test('service lifecycle manages only verified PIDs and releases port 3000', asyn
 
     assert.match(run('start'), /ONLINE/);
     const first = record();
-    assert.equal((await readHealth()).ok, true);
-    assert.equal((await readHealth()).service, 'qingsi-games');
+    assert.equal((await readHealth(port)).ok, true);
+    assert.equal((await readHealth(port)).service, 'qingsi-games');
     assert.match(run('status'), /Process: RUNNING\nHealth: ONLINE/);
     console.log('PASS: start, health and running status');
 
@@ -105,7 +117,7 @@ test('service lifecycle manages only verified PIDs and releases port 3000', asyn
     assert.equal(JSON.parse(fs.readFileSync(pidFile, 'utf8')).pid, first.pid);
     console.log('PASS: second start keeps the same PID');
 
-    ws = new WebSocket('ws://127.0.0.1:3000', { origin: 'http://127.0.0.1:3000', handshakeTimeout: 2000 });
+    ws = new WebSocket(`ws://127.0.0.1:${port}`, { origin: `http://127.0.0.1:${port}`, handshakeTimeout: 2000 });
     await once(ws, 'open');
     assert.doesNotMatch(run('stop'), /timed out/);
     assert.equal(birth(first.pid), null);
@@ -152,9 +164,9 @@ test('service lifecycle manages only verified PIDs and releases port 3000', asyn
     console.log('PASS: SIGINT graceful shutdown');
 
     const manual = await fixture(['server.js'], {
-      PORT: '3000', PUBLIC_BASE_URL: 'https://games.qingsiphotograph.com', QINGSI_GAMES_STARTUP_LOG: logFile,
+      PORT: String(port), PUBLIC_BASE_URL: 'https://games.qingsiphotograph.com', QINGSI_GAMES_STARTUP_LOG: logFile,
     });
-    await waitForHealth();
+    await waitForHealth(port);
     assert.match(run('start'), /already running/);
     assert.equal(record().pid, manual.pid);
     run('stop');
@@ -162,10 +174,10 @@ test('service lifecycle manages only verified PIDs and releases port 3000', asyn
     console.log('PASS: a manually started node server.js instance is recognized without duplication');
 
     const occupied = await fixture(['-e',
-      "require('http').createServer((req, res) => res.end(JSON.stringify({ok:true,service:'another-service'}))).listen(3000, '0.0.0.0', () => console.log('READY'))",
+      `require('http').createServer((req, res) => res.end(JSON.stringify({ok:true,service:'another-service'}))).listen(${port}, '0.0.0.0', () => console.log('READY'))`,
     ]);
     await once(occupied.stdout, 'data');
-    assert.match(run('start', 1), /Port 3000 is already in use/);
+    assert.ok(run('start', 1).includes(`Port ${port} is already in use`));
     assert.match(run('status'), /Health: OFFLINE/);
     assert.ok(birth(occupied.pid));
     occupied.kill('SIGTERM');

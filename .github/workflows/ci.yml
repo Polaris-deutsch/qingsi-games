@@ -12,16 +12,28 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  NPM_CONFIG_REGISTRY: https://registry.npmjs.org
+  NPM_CONFIG_FETCH_RETRIES: '1'
+  NPM_CONFIG_FETCH_TIMEOUT: '30000'
+  NPM_CONFIG_FUND: 'false'
+  NPM_CONFIG_AUDIT_LEVEL: low
+
 jobs:
   test:
+    name: Checks (Node.js ${{ matrix.node-version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     strategy:
+      fail-fast: false
       matrix:
         node-version: [18, 20, 22, 24]
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -30,10 +42,86 @@ jobs:
           cache: npm
 
       - name: Install dependencies
+        timeout-minutes: 3
+        env:
+          NPM_CONFIG_AUDIT: 'false'
         run: npm ci
 
+      - name: Identify the tested commit
+        run: node scripts/release-info.js
+
       - name: Syntax check
+        timeout-minutes: 2
         run: npm run check
 
       - name: Test
+        timeout-minutes: 5
         run: npm test
+
+  audit:
+    name: Security audit (Node.js 24)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup production Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        timeout-minutes: 3
+        env:
+          NPM_CONFIG_AUDIT: 'false'
+        run: npm ci
+
+      - name: Audit production dependencies
+        timeout-minutes: 2
+        run: |
+          if npm audit --omit=dev; then
+            echo 'Production dependency audit passed.'
+          else
+            audit_exit=$?
+            echo "::error::Production audit failed (exit ${audit_exit}). Check advisories and registry/network errors. An unavailable audit is not a pass."
+            exit "$audit_exit"
+          fi
+
+  deployment-gate:
+    name: Deployment gate
+    needs: [test, audit]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup production Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Require every critical check to succeed
+        env:
+          NEEDS_RESULTS: ${{ toJSON(needs) }}
+        run: node scripts/ci-gate.js
+
+      - name: Record the verified commit
+        run: |
+          node scripts/release-info.js > "$RUNNER_TEMP/release-info.json"
+          cat "$RUNNER_TEMP/release-info.json"
+
+      - name: Save version metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-info-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-info.json
+          if-no-files-found: error
+          retention-days: 30

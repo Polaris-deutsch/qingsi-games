@@ -7,6 +7,8 @@ const targets = [
   'server.js',
   'android/main.js',
   'startup-port.js',
+  'public-origin.js',
+  'internet-security.js',
   'games',
   'bots',
   'public/js',
@@ -41,10 +43,14 @@ for (const file of files) {
   const result = spawnSync(process.execPath, ['--check', file], {
     cwd: root,
     encoding: 'utf8',
+    timeout: 10000,
   });
 
   if (result.status !== 0) {
-    process.stderr.write(result.stderr || result.stdout);
+    console.error(`Syntax check failed: ${path.relative(root, file)}`);
+    if (result.error) console.error(result.error.message);
+    if (result.signal) console.error(`Checker terminated by ${result.signal}.`);
+    process.stderr.write(result.stderr || result.stdout || '');
     process.exit(result.status || 1);
   }
 }

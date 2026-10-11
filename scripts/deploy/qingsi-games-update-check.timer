@@ -1,0 +1,13 @@
+# Phase-four installation template only. This file is not installed or enabled.
+[Unit]
+Description=Check QingSi Games updates hourly
+
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=10m
+AccuracySec=1m
+Persistent=true
+Unit=qingsi-games-update-check.service
+
+[Install]
+WantedBy=timers.target

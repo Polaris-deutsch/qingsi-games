@@ -18,4 +18,12 @@ const result = spawnSync(process.execPath, ['--test', ...files], {
   stdio: 'inherit',
 });
 
-process.exit(result.status || 0);
+if (result.error) {
+  console.error(`Test runner failed to execute: ${result.error.message}`);
+  process.exit(1);
+}
+if (result.signal || !Number.isInteger(result.status)) {
+  console.error(`Test runner did not exit normally (signal: ${result.signal || 'unknown'}).`);
+  process.exit(1);
+}
+process.exit(result.status);

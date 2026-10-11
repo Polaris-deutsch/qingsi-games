@@ -43,6 +43,32 @@ Desktop.ini
 # Environment / secrets
 .env
 .env.local
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.token
+/deploy.json
+/scripts/deploy/deploy.json
+secrets/
+.deploy-state/
+migration-backups/
+
+# Local service sockets / PIDs and versioned deployment runtime data
+*.pid
+*.sock
+/state/
+/releases/
+/shared/
+/current
+/previous
+/release-info.json
+/.qingsi-release.json
+
+# Service / deployment logs must stay outside source commits
+*.log
 
 # Screenshots (ad-hoc, not code)
 ScreenShot_*.png

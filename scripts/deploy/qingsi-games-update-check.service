@@ -1,0 +1,27 @@
+# Phase-four installation template only. This file is not installed or enabled.
+# The phase-four installer must precreate state/updates and the deploy.lock file.
+[Unit]
+Description=QingSi Games update detection (manual deployment approval)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=qingsi-games
+Group=qingsi-games
+WorkingDirectory=/opt/qingsi-games-deploy
+ExecStart=/usr/bin/node /opt/qingsi-games-deploy/cli.js check-updates
+Restart=no
+TimeoutStartSec=75
+KillMode=control-group
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/qingsi-games/state/updates /srv/qingsi-games/state/deploy.lock
+NoExecPaths=/srv/qingsi-games/state /srv/qingsi-games/shared
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal

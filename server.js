@@ -27,7 +27,7 @@ logStep('[android-node] server.js require: http');
 logStep('[android-node] server.js require: ws');
 logStep('[android-node] server.js require: os/path/fs/crypto');
 logStep('[android-node] server.js require: startup-port');
-const { getNextPort, isRecoverablePortError } = require('./startup-port');
+const { getNextPort, isRecoverablePortError, getListenConfig } = require('./startup-port');
 const { getPublicBaseUrl, buildRoomShareUrl } = require('./public-origin');
 const {
   getSecurityConfig, isAllowedWebSocketOrigin, createTokenBucket,
@@ -37,7 +37,7 @@ const publicBaseUrl = getPublicBaseUrl(process.env.PUBLIC_BASE_URL);
 const security = getSecurityConfig();
 const { version } = require('./package.json');
 
-const PORT = parseInt(process.env.PORT) || 3000;
+const { port: PORT, host: HOST } = getListenConfig();
 const MAX_PORT_RETRIES = 5;
 const DISCONNECT_GRACE_MS = 30000;
 let activePort = PORT;
@@ -149,7 +149,8 @@ app.get('/qr', async (req, res) => {
 
 app.get('/api/health', (req, res) => {
   res.set('Cache-Control', 'no-store');
-  res.json({ ok: true, service: 'qingsi-games', version });
+  res.json({ ok: true, service: 'qingsi-games', version,
+    ...(deployment?.releaseSha ? { releaseSha: deployment.releaseSha } : {}) });
 });
 
 // Lightweight room existence check (used by lobby to verify resume banner)
@@ -340,6 +341,18 @@ wss.on('close', () => clearInterval(wssHeartbeat));
 
 // ---- Room & Game Management ----
 const rooms = new Map();
+// Optional production integration. Normal LAN/Android/desktop startup does not
+// load the deployment module or require any production configuration.
+const deployment = process.env.QINGSI_ADMIN_SOCKET || process.env.QINGSI_RELEASE_FILE
+  ? require('./scripts/deploy/runtime').createRuntime({
+    root: __dirname, host: HOST, getPort: () => activePort, getRooms: () => rooms,
+    isInitialized: () => Object.keys(gameRegistry).length > 0 && gameLoadErrors.size === 0,
+  }) : null;
+deployment?.ready.catch(() => {
+  console.error('Private deployment integration failed to start.');
+  process.exitCode = 1;
+  shutdownServer();
+});
 
 // Short memorable room IDs: 3-4 char alphanumeric, easy to type & share
 function generateRoomId() {
@@ -629,6 +642,7 @@ function shutdownServer() {
   clearInterval(wssHeartbeat);
   for (const room of rooms.values()) destroyRoom(room);
   for (const ws of wss.clients) ws.terminate();
+  deployment?.close();
   server.close();
   server.closeIdleConnections?.();
 }
@@ -1046,6 +1060,10 @@ wss.on('connection', (ws) => {
       return;
     }
     const { type, data } = msg;
+    if (deployment?.isDraining() && (type === 'create_room' || type === 'join_room')) {
+      ws.send(JSON.stringify({ type: 'error', code: 'SERVER_DRAINING', message: 'Server is preparing a restart' }));
+      return;
+    }
     try {
 
     // --- create_room ---
@@ -1831,7 +1849,7 @@ function startServer(port, attempt = 0) {
   });
 
   server.once('listening', onListening);
-  server.listen(port, '0.0.0.0');
+  server.listen(port, HOST);
 }
 
 startServer(PORT);

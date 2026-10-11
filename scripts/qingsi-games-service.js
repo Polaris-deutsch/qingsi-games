@@ -9,7 +9,7 @@ const { spawn, execFile } = require('node:child_process');
 
 const PROJECT_DIR = fs.realpathSync(path.join(__dirname, '..'));
 const ENTRYPOINT = path.join(PROJECT_DIR, 'server.js');
-const PORT = 3000;
+const PORT = require('./service-port').getServicePort();
 const LOCAL_URL = `http://localhost:${PORT}`;
 const PUBLIC_URL = process.env.PUBLIC_BASE_URL || 'https://games.qingsiphotograph.com';
 const STATE_DIR = path.resolve(process.argv[3]);
@@ -166,7 +166,7 @@ async function start() {
       console.log('QingSi Games is already running.');
       return true;
     }
-    console.error('Port 3000 is already in use. No process was stopped.');
+    console.error(`Port ${PORT} is already in use. No process was stopped.`);
     return false;
   }
 

@@ -1,0 +1,12 @@
+{
+  "root": "/srv/qingsi-games",
+  "nodePath": "/usr/bin/node",
+  "npmCliPath": "/usr/lib/node_modules/npm/bin/npm-cli.js",
+  "candidatePort": 3101,
+  "healthTimeoutMs": 10000,
+  "keepReleases": 5,
+  "productionEnabled": false,
+  "adminSocket": "/run/qingsi-games/admin.sock",
+  "adminTokenFile": "/etc/qingsi-games/admin.token",
+  "ciPolicySha256": ["REPLACE_WITH_REVIEWED_CI_YML_SHA256"]
+}

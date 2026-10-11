@@ -1,0 +1,29 @@
+# Phase-four migration template only. Preserve the existing PUBLIC_BASE_URL drop-in.
+[Service]
+Type=exec
+User=qingsi-games
+Group=qingsi-games
+WorkingDirectory=/srv/qingsi-games/current
+ExecStart=
+ExecStart=/usr/bin/node /srv/qingsi-games/current/server.js
+Environment=NODE_ENV=production PORT=3000 HOST=127.0.0.1
+Environment=QINGSI_RELEASE_FILE=/srv/qingsi-games/current/release-info.json
+Environment=QINGSI_ADMIN_SOCKET=/run/qingsi-games/admin.sock
+Environment=QINGSI_ADMIN_TOKEN_FILE=/etc/qingsi-games/admin.token
+Environment=QINGSI_GAMES_STARTUP_LOG=/srv/qingsi-games/shared/startup.log
+Environment=QINGSI_START_DRAINING=1
+RuntimeDirectory=qingsi-games
+RuntimeDirectoryMode=0700
+KillMode=control-group
+TimeoutStopSec=10
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/srv/qingsi-games/releases
+ReadWritePaths=/srv/qingsi-games/shared /run/qingsi-games
+InaccessiblePaths=-/etc/qingsi-games/github-read.token /etc/qingsi-games/deploy.json /srv/qingsi-games/state /opt/qingsi-games-deploy
+NoExecPaths=/srv/qingsi-games/shared /srv/qingsi-games/state
+StandardOutput=journal
+StandardError=journal

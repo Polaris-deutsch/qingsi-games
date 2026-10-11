@@ -1,0 +1,2 @@
+# Review and install with visudo only during phase four. No blanket script/root rights.
+qingsi-games ALL=(root) NOPASSWD: /usr/bin/systemctl restart qingsi-games.service
