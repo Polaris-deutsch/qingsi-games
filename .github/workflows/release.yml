@@ -16,16 +16,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 17
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -35,7 +37,12 @@ jobs:
 
       # ── Android APK ──
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        timeout-minutes: 5
+        with:
+          cmdline-tools-version: 12266719
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Download nodejs-mobile libnode.so
         run: |

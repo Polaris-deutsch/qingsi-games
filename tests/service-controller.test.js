@@ -60,6 +60,31 @@ test('service port overrides require explicit test mode and never select port 30
   }
 });
 
+test('service wrapper finds Node outside system directories and reports a missing runtime', t => {
+  const state = fs.mkdtempSync(path.join(os.tmpdir(), 'qingsi-node-path-test-'));
+  t.after(() => fs.rmSync(state, { recursive: true, force: true }));
+  const bin = path.join(state, 'bin');
+  fs.mkdirSync(bin);
+  // Give the shell its tools without inheriting any system Node or nvm install.
+  for (const name of ['bash', 'dirname', 'mkdir', 'flock']) {
+    fs.symlinkSync(fs.realpathSync(`/usr/bin/${name}`), path.join(bin, name));
+  }
+  const node = path.join(bin, 'node');
+  fs.symlinkSync(process.execPath, node);
+  const env = { ...process.env, PATH: bin, NVM_DIR: path.join(state, 'no-nvm'),
+    QINGSI_GAMES_STATE_DIR: path.join(state, 'service') };
+  const run = () => spawnSync(script, ['logs'], { cwd: project, env, encoding: 'utf8', timeout: 5000 });
+  const available = run();
+  assert.equal(available.error, undefined);
+  assert.equal(available.status, 0, available.stderr);
+  assert.match(available.stdout, /No QingSi Games log yet/);
+  fs.unlinkSync(node);
+  const missing = run();
+  assert.equal(missing.error, undefined);
+  assert.equal(missing.status, 1);
+  assert.match(missing.stderr, /Node\.js is unavailable/);
+});
+
 test('service lifecycle manages only verified PIDs and releases an isolated test port', async () => {
   const listener = net.createServer();
   listener.listen({ host: '0.0.0.0', port: 0, exclusive: true });
@@ -103,7 +128,10 @@ test('service lifecycle manages only verified PIDs and releases an isolated test
   try {
     const unrelated = await fixture(['-e', 'setInterval(() => {}, 1000)']);
     assert.match(run('status'), /Process: STOPPED\nHealth: OFFLINE/);
-    assert.match(run('status', 0, { PATH: '/usr/bin:/bin' }), /Process: STOPPED\nHealth: OFFLINE/);
+    // setup-node and nvm keep the selected runtime outside /usr/bin. Preserve
+    // that exact runtime while testing the wrapper with a restricted PATH.
+    const minimalPath = [path.dirname(process.execPath), '/usr/bin', '/bin'].join(path.delimiter);
+    assert.match(run('status', 0, { PATH: minimalPath }), /Process: STOPPED\nHealth: OFFLINE/);
     console.log('PASS: stopped status');
 
     assert.match(run('start'), /ONLINE/);

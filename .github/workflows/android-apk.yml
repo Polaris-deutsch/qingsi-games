@@ -17,18 +17,21 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - name: Setup Java
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: 17
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -37,10 +40,17 @@ jobs:
         run: npm ci
 
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        timeout-minutes: 5
+        with:
+          # Keep the existing command-line tools; the removed `tools` package
+          # must not be requested. Gradle resolves the project's SDK packages.
+          cmdline-tools-version: 12266719
+          packages: platform-tools
+          log-accepted-android-sdk-licenses: false
 
       - name: Cache Gradle packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.gradle/caches
@@ -80,9 +90,10 @@ jobs:
           ./gradlew assembleDebug
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: app-debug
+          if-no-files-found: error
           # ABI splits produce one APK per architecture plus a universal one —
           # there is no longer a single app-debug.apk.
           path: android/app/build/outputs/apk/debug/*.apk
