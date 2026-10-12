@@ -14,33 +14,31 @@ const { removeTree } = require('../scripts/deploy/fs-safety');
 const { summarizeRooms } = require('../scripts/deploy/room-status');
 const COMMIT = 'a'.repeat(40), MASTER = 'b'.repeat(40);
 
-test('source adapter fetches only the compiled GitHub URL and archives the requested immutable SHA', async t => {
+test('source adapter fetches only the compiled GitHub URL and resolves the exact immutable SHA', async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qga-'));
   t.after(() => removeTree(os.tmpdir(), root));
   fs.mkdirSync(path.join(root, 'state'));
-  const candidate = path.join(root, 'candidate'); fs.mkdirSync(candidate);
   const calls = [], content = '// trusted exact source\n';
   const blob = crypto.createHash('sha1').update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest('hex');
   let ancestry = 0;
   const execute = async (command, args) => {
     calls.push({ command, args });
-    if (command === '/usr/bin/tar') fs.writeFileSync(path.join(candidate, 'server.js'), content);
     if (args.includes('init')) {
       fs.mkdirSync(path.join(root, 'state/repository.git'));
       fs.writeFileSync(path.join(root, 'state/repository.git/config'), '[core]\nrepositoryformatversion = 0\nfilemode = true\nbare = true\n');
     }
-    if (args.includes('archive')) fs.writeFileSync(args.find(arg => arg.startsWith('--output=')).slice(9), 'mock archive');
     return { code: args.includes('merge-base') ? ancestry : 0,
       output: args.includes('rev-parse') ? `${MASTER}\n` : args.includes('cat-file') ? 'commit\n'
         : args.includes('ls-tree') ? `100644 blob ${blob}\tserver.js\0` : args.includes('show') ? 'Exact source\n' : '' };
   };
   const source = createGitSource({ root }, undefined, execute);
-  const proof = await source.resolve(COMMIT); await source.materialize(proof, candidate);
+  const proof = await source.resolve(COMMIT);
   const fetch = calls.find(call => call.args.includes('fetch'));
   assert.ok(fetch.args.includes(REPOSITORY_URL));
   assert.ok(fetch.args.includes('+refs/heads/master:refs/remotes/trusted/master'));
-  assert.equal(calls.find(call => call.args.includes('archive')).args.at(-1), COMMIT);
-  assert.equal(fs.readFileSync(path.join(candidate, 'server.js'), 'utf8'), content);
+  assert.equal(proof.commitSha, COMMIT);
+  assert.deepEqual(proof.files, [{ path: 'server.js', mode: '100644', blob }]);
+  assert.ok(calls.every(call => call.args.includes('--no-replace-objects') && call.args.includes('core.hooksPath=/dev/null')));
   ancestry = 1;
   await assert.rejects(source.resolve(COMMIT), /master history/);
   fs.appendFileSync(path.join(root, 'state/repository.git/config'), '[url "file:///tmp/evil"]\ninsteadOf=https://github.com/\n');

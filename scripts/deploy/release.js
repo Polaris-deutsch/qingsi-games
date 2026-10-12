@@ -6,25 +6,24 @@ const crypto = require('node:crypto');
 const { REPOSITORY_URL, WORKFLOW } = require('./constants');
 const { sha, fail, noSymlinkPath, atomicJson, readJson, inside } = require('./fs-safety');
 const { run, cleanEnv } = require('./process');
+const { SOURCE_LIMITS, GIT_OPTIONS, validateSourceFiles, exportGitBlobs } = require('./git-blobs');
 
 const digest = value => crypto.createHash('sha256').update(value).digest('hex');
 const approvedPolicy = (value, policy) => (Array.isArray(policy) ? policy : [policy]).includes(value);
 
 function validateTreeListing(output) {
-  return output.split('\0').filter(Boolean).map(line => {
+  if (typeof output !== 'string' || !output.endsWith('\0')) fail('Git tree listing is empty or incomplete.');
+  return validateSourceFiles(output.slice(0, -1).split('\0').map(line => {
     const match = line.match(/^(100644|100755) blob ([a-f0-9]{40})\t([^\x00]+)$/);
     if (!match) fail('Git tree contains unsupported symlinks or submodules.');
-    const relative = match[3];
-    if (relative.startsWith('/') || relative.split('/').some(part => !part || part === '.' || part === '..') || /[\x00-\x1f\\]/.test(relative) ||
-        ['.git', 'node_modules', 'release-info.json', '.qingsi-release.json'].includes(relative.split('/')[0])) {
-      fail('Git tree contains an unsafe or reserved path.');
-    }
-    return { mode: match[1], blob: match[2], path: relative };
-  });
+    return { mode: match[1], blob: match[2], path: match[3] };
+  }));
 }
 
 function verifySource(directory, files) {
-  if (!Array.isArray(files) || files.length === 0) fail('Missing trusted Git tree listing.');
+  validateSourceFiles(files);
+  noSymlinkPath(directory);
+  let totalBytes = 0;
   const expectedFiles = new Set(files.map(file => file.path));
   const expectedDirectories = new Set(['']);
   for (const file of files) {
@@ -45,9 +44,15 @@ function verifySource(directory, files) {
     const target = path.join(directory, file.path);
     if (!inside(directory, target)) fail('Source path escapes the candidate.');
     noSymlinkPath(target);
-    const stat = fs.lstatSync(target);
-    if (!stat.isFile() || stat.size > 128 * 1024 * 1024 || Boolean(stat.mode & 0o111) !== (file.mode === '100755')) fail('Invalid source file or executable mode.');
-    const content = fs.readFileSync(target);
+    let stat;
+    try { stat = fs.lstatSync(target); }
+    catch (error) { if (error.code === 'ENOENT') fail('Approved source file is missing.', 'SOURCE_CHANGED'); throw error; }
+    totalBytes += stat.size;
+    if (!stat.isFile() || stat.nlink !== 1 || stat.size > SOURCE_LIMITS.fileBytes || totalBytes > SOURCE_LIMITS.totalBytes ||
+        (stat.mode & 0o111) !== (file.mode === '100755' ? 0o111 : 0)) fail('Invalid source file, size or executable mode.', 'SOURCE_CHANGED');
+    const fd = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    let content;
+    try { content = fs.readFileSync(fd); } finally { fs.closeSync(fd); }
     const blob = crypto.createHash('sha1').update(`blob ${content.length}\0`).update(content).digest('hex');
     if (blob !== file.blob) fail('Candidate source differs from the approved Git commit.', 'SOURCE_CHANGED');
   }
@@ -139,8 +144,7 @@ function verifyRelease(root, commit, policyDigest) {
 
 function createGitSource(config, signal, execute = run) {
   const cache = path.join(config.root, 'state', 'repository.git');
-  const git = (args, options = {}) => execute('/usr/bin/git', ['-c', 'core.hooksPath=/dev/null', '-c', 'protocol.file.allow=never',
-    '-c', 'protocol.ext.allow=never', ...args], { env: cleanEnv(), timeout: 60000, signal, ...options });
+  const git = (args, options = {}) => execute('/usr/bin/git', [...GIT_OPTIONS, ...args], { env: cleanEnv(), timeout: 60000, signal, ...options });
   async function resolve(commit) {
     sha(commit);
     noSymlinkPath(cache);
@@ -163,14 +167,18 @@ function createGitSource(config, signal, execute = run) {
   async function materialize(proof, directory) {
     const commit = sha(proof.commitSha);
     if (proof.repositoryUrl !== REPOSITORY_URL || proof.inMasterHistory !== true) fail('Untrusted source proof.');
-    const archive = path.join(config.root, 'state', 'source.tar');
-    noSymlinkPath(archive);
-    try {
-      await git(['-C', cache, 'archive', '--format=tar', `--output=${archive}`, commit]);
-      await execute('/usr/bin/tar', ['--extract', '--file', archive, '--directory', directory, '--no-same-owner', '--no-same-permissions'],
-        { env: cleanEnv(), timeout: 30000, signal });
-    } finally { if (fs.existsSync(archive)) fs.unlinkSync(archive); }
-    verifySource(directory, proof.files);
+    noSymlinkPath(cache);
+    noSymlinkPath(directory);
+    if (path.dirname(directory) !== path.join(config.root, 'state', 'candidates') || !path.basename(directory).startsWith(`${commit}.`)) {
+      fail('Source destination must be an isolated candidate for the exact SHA.');
+    }
+    // Re-read the tree to bind every requested blob/path/mode to this commit,
+    // rather than accepting a modified in-memory source proof.
+    if ((await git(['-C', cache, 'cat-file', '-t', commit])).output.trim() !== 'commit') fail('Requested object is not a Git commit.');
+    const files = validateTreeListing((await git(['-C', cache, 'ls-tree', '-r', '-z', commit])).output);
+    if (JSON.stringify(files) !== JSON.stringify(proof.files)) fail('Source proof differs from the exact commit tree.', 'SOURCE_CHANGED');
+    await exportGitBlobs(cache, directory, files, signal);
+    verifySource(directory, files);
   }
   return { resolve, materialize };
 }

@@ -226,7 +226,11 @@ Release 封存后文件为 `0444/0555`、目录为 `0555`，包含已安装依�
 
 ### 10.3 精确 SHA 与 CI 验证
 
-控制器只从 `https://github.com/Polaris-deutsch/qingsi-games` 获取 `master`，检查指定 SHA 是本次获取的远程 master 的祖先，再对该 SHA 执行 `git archive`。缓存配置禁止 URL 重写、额外远程源和 include 配置。master 后续前进不会改变目标 SHA，审批完成后还会重新检查来源与 CI。
+控制器只从 `https://github.com/Polaris-deutsch/qingsi-games` 获取 `master`，检查指定 SHA 是本次获取的远程 master 的祖先。导出前重新读取该 SHA 的 Commit Tree，将路径、模式和 Blob ID 与来源证明完整比对，再用不带 filters/textconv 的 `git cat-file --batch` 流式读取原始 Blob。禁用 Git replace objects 和 hooks；缓存配置禁止 URL 重写、额外远程源和 include 配置。master 后续前进不会改变目标 SHA，审批完成后还会重新检查来源与 CI。
+
+Linux 候选快照保留 Git Blob 原始字节，不使用 `git archive` 的属性转换，也不对校验输入做换行归一化。每个 Blob 的响应身份、类型、字节长度、内容 SHA-1、分隔符和最终 EOF 均严格检查，必须完整且无额外对象。单文件上限 128 MiB、源码总量上限 512 MiB、文件与目录总条目上限 100000；仅向该 SHA 对应的空私有候选目录排他创建文件，拒绝 symlink/submodule、重复/冲突路径与路径穿越。随后仍执行 verifySource，安装和 smoke 后再验证源码，最终以 Release Seal 的 SHA-256 指纹保护源码及依赖。
+
+`.gitattributes` 和 Windows 脚本不变，正常 Windows checkout 仍生成要求的 CRLF；Oracle 的 Linux 部署快照使用原始 Blob 字节。合法导出之后发生的 CRLF 改写同样会被视为 SOURCE_CHANGED，不能用属性作为事后修改的豁免。方案比较、C-2 失败复现与回归记录见 [GIT_SOURCE_INTEGRITY.md](GIT_SOURCE_INTEGRITY.md)。
 
 GitHub API 核验包括：
 
@@ -321,7 +325,7 @@ sudo -n /usr/bin/systemctl restart qingsi-games.service
 | --- | --- |
 | `deploy.sh`、`cli.js`、`config.js`、`constants.js` | 入口、参数 / 私有配置验证、固定仓库和服务策略 |
 | `controller.js` | 准备、批准、切换、回滚、历史、保留策略 |
-| `github.js`、`release.js` | 精确 CI 核验、可信 Git 来源、源码 / 依赖封存 |
+| `github.js`、`release.js`、`git-blobs.js` | 精确 CI 核验、可信 Commit Tree / 原始 Blob 导出、源码 / 依赖封存 |
 | `health.js`、`process.js`、`lock-holder.js` | HTTP / WS / systemd / proc 验证、有界子进程、flock |
 | `runtime.js`、`fs-safety.js` | 可选私有运行时接口和文件 / 路径校验 |
 | `config.example.json`、`40-versioned-release.conf.example`、`sudoers.example` | 第四阶段需人工审核的配置模板 |
